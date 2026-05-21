@@ -12,7 +12,11 @@ function statusBadge(map: PoolMap): React.ReactNode {
   return null
 }
 
-export function MappoolTable() {
+interface Props {
+  onRowClick?: (map: PoolMap) => void
+}
+
+export function MappoolTable({ onRowClick }: Props) {
   const played = MAPPOOL.filter((m) => m.status === "completed").length
   const banned = MAPPOOL.filter((m) => m.status === "banned").length
 
@@ -44,6 +48,8 @@ export function MappoolTable() {
                 style={rowStyle(map)}
                 tabIndex={0}
                 className="cursor-pointer border-b border-border/40 transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                onClick={() => onRowClick?.(map)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onRowClick?.(map) }}
               >
                 <td className="px-3 py-2.5">
                   <span className="font-heading text-sm font-bold" style={{ color: POOL_CONFIG[map.pool].hex }}>

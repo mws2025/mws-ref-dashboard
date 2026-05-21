@@ -3,9 +3,10 @@ import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { MOCK_USER } from "@/data/constants"
-import { AUDIT_LOG, DECISION_QUEUE, INVENTORY_A, INVENTORY_B, MATCH } from "@/data/mock"
-import type { Match } from "@/types"
+import { AUDIT_LOG, INVENTORY_A, INVENTORY_B, MATCH } from "@/data/mock"
+import type { Match, PoolMap } from "@/types"
 import { IrcChat } from "./IrcChat"
+import { MapActionModal } from "./MapActionModal"
 import { MappoolTable } from "./MappoolTable"
 import { PlayerColumn } from "./PlayerColumn"
 import { RecipePanel } from "./RecipePanel"
@@ -17,6 +18,7 @@ interface Props {
 
 export function MatchPanel({ match, onBack }: Props) {
   const [poolWidth, setPoolWidth] = useState(440)
+  const [selectedMap, setSelectedMap] = useState<PoolMap | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
 
   function onDragStart(e: React.MouseEvent) {
@@ -70,7 +72,7 @@ export function MatchPanel({ match, onBack }: Props) {
         />
 
         <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
-          <MappoolTable />
+          <MappoolTable onRowClick={setSelectedMap} />
         </div>
 
         {/* Resize handle */}
@@ -85,8 +87,7 @@ export function MatchPanel({ match, onBack }: Props) {
             <div className="flex-shrink-0 border-b border-border bg-card/40 px-3 py-2">
               <TabsList className="w-full">
                 <TabsTrigger value="recipes" className="flex-1 text-xs">Recipes</TabsTrigger>
-                <TabsTrigger value="queue"   className="flex-1 text-xs">Queue</TabsTrigger>
-                <TabsTrigger value="audit"   className="flex-1 text-xs">Audit</TabsTrigger>
+                <TabsTrigger value="logs"    className="flex-1 text-xs">Logs</TabsTrigger>
                 <TabsTrigger value="irc"     className="flex-1 text-xs">IRC</TabsTrigger>
               </TabsList>
             </div>
@@ -100,17 +101,7 @@ export function MatchPanel({ match, onBack }: Props) {
               />
             </TabsContent>
 
-            <TabsContent value="queue" className="flex-1 overflow-y-auto p-4 space-y-2">
-              <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Pending actions</p>
-              {DECISION_QUEUE.map((item) => (
-                <div key={item.label} className="flex items-start justify-between gap-2 rounded-md border border-border bg-card/50 px-3 py-2">
-                  <span className="text-xs">{item.label}</span>
-                  <Badge variant="secondary" className="flex-shrink-0 text-xs">{item.status}</Badge>
-                </div>
-              ))}
-            </TabsContent>
-
-            <TabsContent value="audit" className="flex-1 overflow-y-auto p-4 space-y-1.5">
+            <TabsContent value="logs" className="flex-1 overflow-y-auto p-4 space-y-1.5">
               <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Event log</p>
               {AUDIT_LOG.slice().reverse().map((e, i) => (
                 <div key={i} className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs">
@@ -129,6 +120,17 @@ export function MatchPanel({ match, onBack }: Props) {
           </Tabs>
         </aside>
       </div>
+
+      <MapActionModal
+        map={selectedMap}
+        playerA={match.playerA}
+        playerB={match.playerB}
+        onClose={() => setSelectedMap(null)}
+        onAction={(action, player) => {
+          // TODO: dispatch pick/ban/protect to server
+          console.log(action, player, selectedMap?.slot)
+        }}
+      />
     </div>
   )
 }
