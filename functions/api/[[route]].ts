@@ -41,16 +41,31 @@ type ApiMatchStatus = "scheduled" | "upcoming" | "live" | "completed" | "forfeit
 type ApiMatch = {
   id: string
   round: string
+  mappool?: string
   playerA: string
   playerB: string
   date: string
   time: string
   status: ApiMatchStatus
+  scoreA?: number
+  scoreB?: number
+  bestOf?: number
   lobbyUrl?: string
   winner?: string
   currentMap?: string
   notes?: string
   referee?: string
+  streamer?: string
+}
+
+type ApiPoolMap = {
+  slot: string
+  pool: string
+  map: string
+  status: string
+  pickedBy?: string
+  bannedBy?: string
+  winner?: string
 }
 
 const OSU_AUTH_BASE = "https://osu.ppy.sh"
@@ -201,6 +216,14 @@ async function getGoogleAccessToken(env: Bindings): Promise<string> {
   return tokenJson.access_token
 }
 
+async function getSheetValuesSafe(env: Bindings, rangeA1: string): Promise<string[][]> {
+  try {
+    return await getSheetValues(env, rangeA1)
+  } catch {
+    return []
+  }
+}
+
 async function getSheetValues(env: Bindings, rangeA1: string): Promise<string[][]> {
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const accessToken = await getGoogleAccessToken(env)
@@ -322,25 +345,36 @@ function mapPlayersById(playerRecords: SheetRecord[]): Map<string, string> {
   return playersById
 }
 
+function parseOptionalInt(value: string): number | undefined {
+  const n = parseInt(value, 10)
+  return isNaN(n) ? undefined : n
+}
+
 function mapMatchRecord(record: SheetRecord, playersById: Map<string, string>): ApiMatch {
   const playerA = firstValue(record, ["player_a", "team_a", "playera", "team_a_id"])
   const playerB = firstValue(record, ["player_b", "team_b", "playerb", "team_b_id"])
   const referee = firstValue(record, ["referee", "ref"])
   const notes = firstValue(record, ["notes"])
+  const bestOf = parseOptionalInt(firstValue(record, ["best_of", "bestof", "bo"]))
 
   return {
     id: firstValue(record, ["match_id", "id"]),
     round: firstValue(record, ["round"]),
+    mappool: firstValue(record, ["mappool", "mappool_id", "pool"]) || undefined,
     playerA: getPlayerName(playerA, playersById),
     playerB: getPlayerName(playerB, playersById),
     date: firstValue(record, ["date", "match_date", "scheduled_date", "scheduled_at"]) || "TBD",
     time: firstValue(record, ["time", "match_time", "scheduled_time", "start_time"]) || "TBD",
     status: normalizeMatchStatus(firstValue(record, ["status"])),
+    scoreA: parseOptionalInt(firstValue(record, ["score_a", "scorea"])),
+    scoreB: parseOptionalInt(firstValue(record, ["score_b", "scoreb"])),
+    bestOf,
     lobbyUrl: firstValue(record, ["lobby_url", "lobby", "mp_link"]) || undefined,
     winner: firstValue(record, ["winner"]) || undefined,
     currentMap: firstValue(record, ["current_map", "current_map_id"]) || undefined,
     notes: notes || undefined,
     referee: referee || undefined,
+    streamer: firstValue(record, ["streamer"]) || undefined,
   }
 }
 
@@ -813,6 +847,81 @@ app.get("/api/matches", async (c) => {
       },
       500
     )
+  }
+})
+
+app.get("/api/match/:matchId/mappool", async (c) => {
+  const matchId = c.req.param("matchId")
+  const mappoolId = c.req.query("mappool") ?? ""
+  const playerA   = c.req.query("playerA") ?? ""
+  const playerB   = c.req.query("playerB") ?? ""
+
+  try {
+    const [poolValues, matchMapValues] = await Promise.all([
+      getSheetValuesSafe(c.env, "mappool!A1:Z"),
+      getSheetValuesSafe(c.env, "match_maps!A1:Z"),
+    ])
+
+    const poolRecords     = sheetRowsToRecords(poolValues)
+    const matchMapRecords = sheetRowsToRecords(matchMapValues)
+
+    const roundMaps = mappoolId
+      ? poolRecords.filter((r) => r["round"]?.trim().toLowerCase() === mappoolId.trim().toLowerCase())
+      : poolRecords
+
+    const overrides = new Map<string, SheetRecord>()
+    matchMapRecords
+      .filter((r) => r["match_id"]?.trim() === matchId)
+      .forEach((r) => { overrides.set(r["slot"]?.trim() ?? "", r) })
+
+    const mappool: ApiPoolMap[] = roundMaps.map((r) => {
+      const slot = r["map_id"]?.trim() ?? ""
+      const ov   = overrides.get(slot)
+      return {
+        slot,
+        pool:     r["mod_pool"]?.trim() ?? "",
+        map:      r["title"]?.trim() ?? "",
+        status:   ov?.["status"]?.trim() || "available",
+        pickedBy: ov?.["picked_by"]?.trim() || undefined,
+        bannedBy: ov?.["banned_by"]?.trim() || undefined,
+        winner:   ov?.["winner"]?.trim() || undefined,
+      }
+    })
+
+    const matchMaps = matchMapRecords.filter((r) => r["match_id"]?.trim() === matchId)
+    const scoreA = matchMaps.filter((r) => r["winner"]?.trim() === playerA).length
+    const scoreB = matchMaps.filter((r) => r["winner"]?.trim() === playerB).length
+
+    return c.json({ mappool, scoreA, scoreB })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load mappool" }, 500)
+  }
+})
+
+app.get("/api/match/:matchId/inventory", async (c) => {
+  const matchId = c.req.param("matchId")
+  const playerA = c.req.query("playerA") ?? ""
+  const playerB = c.req.query("playerB") ?? ""
+  const INGREDIENT_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
+
+  try {
+    const inventoryValues = await getSheetValuesSafe(c.env, "inventory!A1:Z")
+    const records = sheetRowsToRecords(inventoryValues).filter(
+      (r) => r["match_id"]?.trim() === matchId
+    )
+
+    function parsePlayer(player: string): Record<string, number> {
+      const row = records.find(
+        (r) => r["player"]?.trim().toLowerCase() === player.trim().toLowerCase()
+      )
+      return Object.fromEntries(
+        INGREDIENT_KEYS.map((k) => [k, Number(row?.[k] ?? 0) || 0])
+      )
+    }
+
+    return c.json({ a: parsePlayer(playerA), b: parsePlayer(playerB) })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load inventory" }, 500)
   }
 })
 

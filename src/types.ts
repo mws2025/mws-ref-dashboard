@@ -34,6 +34,9 @@ export interface Match {
   date: string
   time: string
   status: MatchStatus
+  scoreA?: number
+  scoreB?: number
+  bestOf?: number
   lobbyUrl?: string
   winner?: string
   currentMap?: string
