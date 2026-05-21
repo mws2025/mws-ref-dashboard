@@ -17,7 +17,7 @@ interface Props {
 }
 
 export function MatchPanel({ match, onBack }: Props) {
-  const [poolWidth, setPoolWidth] = useState(440)
+  const [poolWidth, setPoolWidth] = useState(770)
   const [selectedMap, setSelectedMap] = useState<PoolMap | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
 
