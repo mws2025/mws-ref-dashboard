@@ -1,3 +1,4 @@
+import { useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -15,6 +16,29 @@ interface Props {
 }
 
 export function MatchPanel({ match, onBack }: Props) {
+  const [poolWidth, setPoolWidth] = useState(440)
+  const dragState = useRef<{ startX: number; startW: number } | null>(null)
+
+  function onDragStart(e: React.MouseEvent) {
+    e.preventDefault()
+    dragState.current = { startX: e.clientX, startW: poolWidth }
+
+    function onMove(ev: MouseEvent) {
+      if (!dragState.current) return
+      const dx = ev.clientX - dragState.current.startX
+      setPoolWidth(Math.max(200, Math.min(900, dragState.current.startW + dx)))
+    }
+
+    function onUp() {
+      dragState.current = null
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+  }
+
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
       {/* Header */}
@@ -23,7 +47,7 @@ export function MatchPanel({ match, onBack }: Props) {
         <Separator orientation="vertical" className="h-auto" />
         <button
           onClick={onBack}
-          className="self-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="cursor-pointer self-center text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           ← Dashboard
         </button>
@@ -45,7 +69,15 @@ export function MatchPanel({ match, onBack }: Props) {
           refName={MOCK_USER.name}
         />
 
-        <MappoolTable />
+        <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
+          <MappoolTable />
+        </div>
+
+        {/* Resize handle */}
+        <div
+          className="w-1 flex-shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary/40 active:bg-primary/60"
+          onMouseDown={onDragStart}
+        />
 
         {/* Right: tabbed panel */}
         <aside className="flex min-w-0 flex-1 flex-col overflow-hidden border-l border-border">

@@ -11,7 +11,7 @@ export const POOL_CONFIG: Record<Pool, { hex: string; ing: IngKey | null; label:
   HR: { hex: "#8d3f38", ing: "butter", label: "HR" },
   DT: { hex: "#4e6a7a", ing: "flour",  label: "DT" },
   FM: { hex: "#5f7f63", ing: "milk",   label: "FM" },
-  TB: { hex: "#5f7f63", ing: null,     label: "TB" },
+  TB: { hex: "#ffffff", ing: null,     label: "TB" },
 }
 
 export const INGREDIENTS: { key: IngKey; name: string; pool: string; hex: string }[] = [

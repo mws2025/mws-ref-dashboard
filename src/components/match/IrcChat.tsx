@@ -53,7 +53,7 @@ export function IrcChat() {
             <button
               key={c.label}
               onClick={() => setDraft(c.cmd)}
-              className="rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+              className="cursor-pointer rounded border border-border bg-card px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
             >
               {c.label}
             </button>

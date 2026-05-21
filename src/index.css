@@ -153,4 +153,30 @@
   ::selection {
     background: rgba(164, 86, 78, 0.28);
   }
+
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(99, 72, 50, 0.22);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 72, 50, 0.45);
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background: rgba(235, 223, 208, 0.18);
+  }
+
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: rgba(235, 223, 208, 0.38);
+  }
 }

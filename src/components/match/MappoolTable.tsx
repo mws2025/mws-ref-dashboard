@@ -17,7 +17,7 @@ export function MappoolTable() {
   const banned = MAPPOOL.filter((m) => m.status === "banned").length
 
   return (
-    <main className="flex flex-col overflow-hidden" style={{ width: "45%", flexShrink: 0 }}>
+    <main className="flex h-full flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex flex-shrink-0 items-center gap-3 border-b border-border bg-card/40 px-4 py-2">
         <span className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Mappool</span>
@@ -42,7 +42,8 @@ export function MappoolTable() {
               <tr
                 key={map.slot}
                 style={rowStyle(map)}
-                className="border-b border-border/40 transition-opacity"
+                tabIndex={0}
+                className="cursor-pointer border-b border-border/40 transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
               >
                 <td className="px-3 py-2.5">
                   <span className="font-heading text-sm font-bold" style={{ color: POOL_CONFIG[map.pool].hex }}>
