@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import { CURRENT_ROUND, TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
+import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
 import type { Match } from "@/types"
 
@@ -87,8 +87,6 @@ export function DashboardPage({ currentUserName, onOpenMatch, onLogout }: Props)
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Badge className="border-0 bg-secondary text-secondary-foreground">{CURRENT_ROUND}</Badge>
-            <Badge className="border-0 bg-accent text-accent-foreground">{activeMatches.length} Live</Badge>
             <Button size="sm" variant="outline" onClick={onLogout}>Sign out</Button>
           </div>
         </header>
