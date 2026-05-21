@@ -10,7 +10,15 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.wrangler
 *.local
+.env
+.env.*
+!.env.example
+service-account.json
+
+sheets/
+plan.md
 
 # Editor directories and files
 .vscode/*
@@ -22,3 +30,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.claude/
