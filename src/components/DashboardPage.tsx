@@ -8,6 +8,12 @@ import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
 import type { Match } from "@/types"
 
+function splitTournamentName(full: string): [string, string] {
+  const idx = full.indexOf(" — ")
+  if (idx !== -1) return [full.slice(0, idx), full.slice(idx + 3)]
+  return [full, ""]
+}
+
 type MatchesResponse = {
   matches: Match[]
   yourMatches: Match[]
@@ -17,6 +23,8 @@ type MatchesResponse = {
 
 interface Props {
   currentUserName: string
+  tournamentName?: string
+  abbreviation?: string
   onOpenMatch: (m: Match) => void
   onLogout: () => void
 }
@@ -71,7 +79,10 @@ function SkeletonTableRows() {
   )
 }
 
-export function DashboardPage({ currentUserName, onOpenMatch, onLogout }: Props) {
+export function DashboardPage({ currentUserName, tournamentName, abbreviation, onOpenMatch, onLogout }: Props) {
+  const fullName = tournamentName || `${TOURNAMENT_NAME} — ${TOURNAMENT_SUBTITLE}`
+  const [nameA, nameB] = splitTournamentName(fullName)
+  const abbr = abbreviation || ""
   const [matchesResponse, setMatchesResponse] = useState<MatchesResponse | null>(null)
   const [matchesError, setMatchesError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -118,8 +129,8 @@ export function DashboardPage({ currentUserName, onOpenMatch, onLogout }: Props)
           <div className="flex items-center gap-4">
             <img src="/assets/logo_light.png" alt="Whisked 2026" className="h-14 w-auto object-contain" />
             <div className="space-y-0.5">
-              <p className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground">{TOURNAMENT_NAME}</p>
-              <h1 className="font-heading text-2xl leading-tight">{TOURNAMENT_SUBTITLE} · Referee Dashboard</h1>
+              <p className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground">{abbr || nameA}</p>
+              <h1 className="font-heading text-2xl leading-tight">{nameB || nameA} · Referee Dashboard</h1>
               <p className="text-sm text-muted-foreground">Welcome back, {currentUserName}.</p>
             </div>
           </div>

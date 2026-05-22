@@ -9,19 +9,17 @@ import type { Match } from "@/types"
 type AuthStatus = "loading" | "guest" | "authenticated"
 type SessionUser = { username: string; osu_id: number }
 
-function getAuthLoginUrl(): string {
+function getApiUrl(path: string): string {
   const configuredOrigin = import.meta.env.VITE_PAGES_DEV_ORIGIN?.trim()
   if (configuredOrigin) {
-    return `${configuredOrigin.replace(/\/$/, "")}/api/auth/osu/login`
+    return `${configuredOrigin.replace(/\/$/, "")}${path}`
   }
-
   const { protocol, hostname, port, origin } = window.location
   const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1"
   if (isLocalHost && port !== "8788") {
-    return `${protocol}//${hostname}:8788/api/auth/osu/login`
+    return `${protocol}//${hostname}:8788${path}`
   }
-
-  return `${origin}/api/auth/osu/login`
+  return `${origin}${path}`
 }
 
 function MatchPanelRoute({ onBack }: { onBack: () => void }) {
@@ -42,18 +40,32 @@ function App() {
   const navigate = useNavigate()
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading")
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
+  const [restrictAccess, setRestrictAccess] = useState<boolean>(true)
+  const [tournamentName, setTournamentName] = useState("")
+  const [abbreviation, setAbbreviation] = useState("")
 
   const refreshSession = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/session", { credentials: "include" })
-      if (!res.ok) {
+      const [sessionRes, configRes] = await Promise.all([
+        fetch("/api/auth/session", { credentials: "include" }),
+        fetch("/api/public/config"),
+      ])
+
+      if (configRes.ok) {
+        const cfg = await configRes.json() as { restrictAccess?: boolean; tournamentName?: string; abbreviation?: string }
+        setRestrictAccess(cfg.restrictAccess ?? true)
+        if (cfg.tournamentName) setTournamentName(cfg.tournamentName)
+        if (cfg.abbreviation)   setAbbreviation(cfg.abbreviation)
+      }
+
+      if (!sessionRes.ok) {
         setSessionUser(null)
         setAuthStatus("guest")
-        if (res.status === 403) navigate("/error/403")
+        if (sessionRes.status === 403) navigate("/error/403")
         return
       }
 
-      const data = await res.json() as { user?: SessionUser }
+      const data = await sessionRes.json() as { user?: SessionUser }
       if (!data.user) {
         setSessionUser(null)
         setAuthStatus("guest")
@@ -96,10 +108,18 @@ function App() {
 
   return (
     <Routes>
-      <Route path="/" element={<LandingPage onLogin={() => window.location.assign(getAuthLoginUrl())} />} />
+      <Route path="/" element={
+        <LandingPage
+          restrictAccess={restrictAccess}
+          tournamentName={tournamentName}
+          onLogin={() => window.location.assign(getApiUrl(restrictAccess ? "/api/auth/osu/login" : "/api/auth/bypass"))}
+        />
+      } />
       <Route path="/dashboard" element={
         <DashboardPage
           currentUserName={sessionUser?.username ?? "Referee"}
+          tournamentName={tournamentName}
+          abbreviation={abbreviation}
           onOpenMatch={(m) => navigate(`/match/${m.id}`, { state: { match: m } })}
           onLogout={() => { void logout() }}
         />

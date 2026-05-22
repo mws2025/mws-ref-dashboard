@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AUDIT_LOG, INVENTORY_A, INVENTORY_B } from "@/data/mock"
@@ -22,14 +23,17 @@ export function MatchPanel({ match, onBack }: Props) {
   const [liveInventory, setLiveInventory] = useState<{ a: Inventory; b: Inventory } | null>(null)
   const [liveScoreA, setLiveScoreA] = useState<number>(match.scoreA ?? 0)
   const [liveScoreB, setLiveScoreB] = useState<number>(match.scoreB ?? 0)
+  const [matchRules, setMatchRules] = useState<Record<string, string>>({})
+  const [rulesOpen, setRulesOpen] = useState(false)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
 
   useEffect(() => {
     async function load() {
       const params = new URLSearchParams({ mappool: match.mappool ?? "", playerA: match.playerA, playerB: match.playerB })
-      const [mpRes, invRes] = await Promise.all([
+      const [mpRes, invRes, cfgRes] = await Promise.all([
         fetch(`/api/match/${match.id}/mappool?${params}`, { credentials: "include" }),
         fetch(`/api/match/${match.id}/inventory?${params}`, { credentials: "include" }),
+        fetch("/api/public/config"),
       ])
       if (mpRes.ok) {
         const data = await mpRes.json() as { mappool: PoolMap[]; scoreA: number; scoreB: number }
@@ -40,6 +44,10 @@ export function MatchPanel({ match, onBack }: Props) {
       if (invRes.ok) {
         const data = await invRes.json() as { a: Inventory; b: Inventory }
         setLiveInventory(data)
+      }
+      if (cfgRes.ok) {
+        const cfg = await cfgRes.json() as { rules?: Record<string, string> }
+        if (cfg.rules) setMatchRules(cfg.rules)
       }
     }
     void load()
@@ -84,7 +92,40 @@ export function MatchPanel({ match, onBack }: Props) {
         <Badge className="self-center border-0 bg-secondary text-secondary-foreground text-xs">{match.round}</Badge>
         <Badge variant="default" className="self-center text-xs">Live</Badge>
         <span className="ml-auto self-center font-mono text-xs text-muted-foreground">{match.lobbyUrl}</span>
+        {Object.values(matchRules).some(Boolean) && (
+          <button
+            onClick={() => setRulesOpen(true)}
+            className="self-center rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+          >
+            Rules
+          </button>
+        )}
       </header>
+
+      <Dialog open={rulesOpen} onOpenChange={setRulesOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Match Rules Reference</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {([
+              ["Late",       matchRules.late],
+              ["Roll",       matchRules.roll],
+              ["Picks/Bans", matchRules.picksBans],
+              ["FM",         matchRules.fm],
+              ["Warmups",    matchRules.warmups],
+              ["Timeout",    matchRules.timeout],
+              ["Disconnect", matchRules.disconnect],
+              ["Tiebreaker", matchRules.tb],
+            ] as [string, string | undefined][]).filter(([, v]) => v).map(([label, value]) => (
+              <div key={label}>
+                <p className="font-heading text-xs uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
+                <p className="mt-0.5">{value}</p>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 3-column body */}
       <div className="flex min-h-0 flex-1 overflow-hidden">

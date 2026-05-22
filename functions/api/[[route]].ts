@@ -612,9 +612,24 @@ function oauthStateCookieOptions(requestUrl: string) {
   }
 }
 
+async function getConfigMap(env: Bindings): Promise<Map<string, string>> {
+  const values = await getSheetValuesSafe(env, "config!A:B")
+  const map = new Map<string, string>()
+  for (const row of values) {
+    const key = row[0]?.trim().toLowerCase()
+    const value = row[1]?.trim() ?? ""
+    if (key) map.set(key, value)
+  }
+  return map
+}
+
+function isRestrictAccess(configMap: Map<string, string>): boolean {
+  return configMap.get("restrict access")?.toLowerCase() !== "false"
+}
+
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname
-  if (path === "/api/health" || path === "/api/public/state" || path.startsWith("/api/auth/")) {
+  if (path === "/api/health" || path.startsWith("/api/public/") || path.startsWith("/api/auth/")) {
     return next()
   }
 
@@ -947,6 +962,44 @@ app.get("/api/public/state", (c) => {
       Boolean(c.env.GOOGLE_SHEETS_TOURNAMENT_ID),
     updatedAt: new Date().toISOString(),
   })
+})
+
+app.get("/api/public/config", async (c) => {
+  try {
+    const configMap = await getConfigMap(c.env)
+    return c.json({
+      restrictAccess: isRestrictAccess(configMap),
+      tournamentName: configMap.get("tournament name") ?? "",
+      abbreviation:   configMap.get("abbreviation") ?? "",
+      rules: {
+        late:       configMap.get("late rules") ?? "",
+        roll:       configMap.get("roll rules") ?? "",
+        picksBans:  configMap.get("picks/bans") ?? "",
+        fm:         configMap.get("fm rules") ?? "",
+        warmups:    configMap.get("warmups") ?? "",
+        timeout:    configMap.get("timeout rules") ?? "",
+        disconnect: configMap.get("disconnect rules") ?? "",
+        tb:         configMap.get("tb rules") ?? "",
+      },
+    })
+  } catch {
+    return c.json({ restrictAccess: true, tournamentName: "", abbreviation: "", rules: {} })
+  }
+})
+
+app.get("/api/auth/bypass", async (c) => {
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (isRestrictAccess(configMap)) {
+      return c.json({ error: "Access is restricted" }, 403)
+    }
+    const sessionSecret = mustEnv(c.env, "SESSION_SECRET")
+    const sessionToken = await issueSessionToken(sessionSecret, { username: "Referee", osuId: 0 })
+    setCookie(c, SESSION_COOKIE_NAME, sessionToken, sessionCookieOptions(c.req.url))
+    return c.redirect("/", 302)
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Bypass failed" }, 500)
+  }
 })
 
 export const onRequest = handle(app)
