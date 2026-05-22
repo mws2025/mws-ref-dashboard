@@ -10,6 +10,7 @@ type Bindings = {
   OSU_CLIENT_SECRET?: string
   OSU_REDIRECT_URI?: string
   SESSION_SECRET?: string
+  OSU_PROXY_BASE?: string
 }
 
 type ServiceAccountJson = {
@@ -69,6 +70,10 @@ type ApiPoolMap = {
 }
 
 const OSU_AUTH_BASE = "https://osu.ppy.sh"
+
+function osuApiBase(env: Bindings): string {
+  return env.OSU_PROXY_BASE?.trim() || OSU_AUTH_BASE
+}
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 const SESSION_COOKIE_NAME = "mws_ref_session"
@@ -448,7 +453,7 @@ async function exchangeOsuCodeForToken(
     redirect_uri: redirectUri,
   })
 
-  const tokenRes = await fetch(`${OSU_AUTH_BASE}/oauth/token`, {
+  const tokenRes = await fetch(`${osuApiBase(env)}/oauth/token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -470,8 +475,8 @@ async function exchangeOsuCodeForToken(
   return tokenJson.access_token
 }
 
-async function fetchOsuUser(accessToken: string): Promise<OsuUser> {
-  const userRes = await fetch(`${OSU_AUTH_BASE}/api/v2/me/osu`, {
+async function fetchOsuUser(accessToken: string, env: Bindings): Promise<OsuUser> {
+  const userRes = await fetch(`${osuApiBase(env)}/api/v2/me/osu`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -724,7 +729,7 @@ app.get("/api/auth/osu/preflight", async (c) => {
       scope: "public",
     })
 
-    const tokenRes = await fetch(`${OSU_AUTH_BASE}/oauth/token`, {
+    const tokenRes = await fetch(`${osuApiBase(c.env)}/oauth/token`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -783,7 +788,7 @@ async function handleOsuCallback(c: AppContext) {
   try {
     const redirectUri = resolveOsuRedirectUri(c)
     const accessToken = await exchangeOsuCodeForToken(c.env, oauthCode, redirectUri)
-    const osuUser = await fetchOsuUser(accessToken)
+    const osuUser = await fetchOsuUser(accessToken, c.env)
     const accessRows = await getAccessRows(c.env)
     const allowedRow = findAuthorizedAccessRow(accessRows, osuUser)
 
