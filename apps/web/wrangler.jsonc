@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mws-website",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-05-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": ".open-next/assets",
+  },
+  // TODO: create kv namespace
+  // bunx wrangler kv namespace create NEXT_INC_CACHE_KV
+  "kv_namespaces": [
+    { "binding": "NEXT_INC_CACHE_KV", "id": "<created via wrangler>" },
+  ],
+  "services": [
+    // wire this once apps/api-proxy is deployed
+    // { "binding": "API", "service": "mws-api-proxy" }
+  ],
+  "observability": { "enabled": true },
+}
