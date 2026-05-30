@@ -74,6 +74,35 @@ type ApiPoolMap = {
   winner?: string
 }
 
+type HomeMod = "NM" | "HD" | "HR" | "DT" | "FM"
+type MatchFlowPhase =
+  | "lobby"
+  | "roll"
+  | "order"
+  | "home_mod"
+  | "ban"
+  | "craft"
+  | "play"
+  | "ready_result"
+  | "completed"
+
+type MatchFlowState = {
+  matchId: string
+  phase: MatchFlowPhase
+  rollA?: number
+  rollB?: number
+  rollWinner?: string
+  firstPicker?: string
+  firstBanner?: string
+  turnPlayer?: string
+  homeModA?: HomeMod
+  homeModB?: HomeMod
+  currentSlot?: string
+  updatedAt?: string
+}
+
+type InventoryMap = Record<"egg" | "sugar" | "butter" | "flour" | "milk", number>
+
 const OSU_AUTH_BASE = "https://osu.ppy.sh"
 
 function osuApiBase(env: Bindings): string {
@@ -84,6 +113,30 @@ const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 const SESSION_COOKIE_NAME = "mws_ref_session"
 const OAUTH_STATE_COOKIE_NAME = "mws_osu_oauth_state"
 const SESSION_TTL_SECONDS = 60 * 60 * 12
+const MATCH_STATE_SHEET = "match_state"
+const MATCH_STATE_HEADERS = [
+  "match_id",
+  "phase",
+  "roll_a",
+  "roll_b",
+  "roll_winner",
+  "first_picker",
+  "first_banner",
+  "turn_player",
+  "home_mod_a",
+  "home_mod_b",
+  "current_slot",
+  "updated_at",
+] as const
+const INVENTORY_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
+const POOL_TO_INGREDIENT: Record<string, keyof InventoryMap | undefined> = {
+  NM: "egg",
+  HD: "sugar",
+  HR: "butter",
+  DT: "flour",
+  FM: "milk",
+}
+const DEFAULT_BAN_ORDER = "ABAB"
 
 const app = new Hono<{ Bindings: Bindings }>()
 type AppContext = Context<{ Bindings: Bindings }>
@@ -823,6 +876,258 @@ async function updateMatchFields(env: Bindings, matchId: string, fields: Record<
   }
 }
 
+async function batchUpdateValues(env: Bindings, data: { range: string; values: string[][] }[]): Promise<void> {
+  if (data.length === 0) return
+  const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
+  const accessToken = await getGoogleAccessToken(env)
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ valueInputOption: "RAW", data }),
+  })
+  if (!res.ok) {
+    const reason = await res.text()
+    throw new Error(`Sheets batch write failed: ${res.status} ${reason}`)
+  }
+}
+
+async function ensureSheetWithHeaders(env: Bindings, sheetName: string, headers: readonly string[]): Promise<void> {
+  const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
+  const accessToken = await getGoogleAccessToken(env)
+  const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties.title`
+  const metaRes = await fetch(metaUrl, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  })
+  if (!metaRes.ok) {
+    const reason = await metaRes.text()
+    throw new Error(`Sheets metadata read failed: ${metaRes.status} ${reason}`)
+  }
+
+  const meta = toRecord(await metaRes.json())
+  const sheets = Array.isArray(meta?.sheets) ? meta.sheets : []
+  const exists = sheets.some((sheet) => {
+    const record = toRecord(sheet)
+    const props = record ? toRecord(record.properties) : null
+    return props?.title === sheetName
+  })
+
+  if (!exists) {
+    const addRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}:batchUpdate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ requests: [{ addSheet: { properties: { title: sheetName } } }] }),
+    })
+    if (!addRes.ok) {
+      const reason = await addRes.text()
+      throw new Error(`Sheet create failed: ${addRes.status} ${reason}`)
+    }
+  }
+
+  const current = await getSheetValuesSafe(env, `${sheetName}!A1:${colLetter(headers.length - 1)}1`)
+  if (!current[0] || current[0].every((cell) => !cell.trim())) {
+    await batchUpdateValues(env, [
+      { range: `${sheetName}!A1:${colLetter(headers.length - 1)}1`, values: [headers as string[]] },
+    ])
+  }
+}
+
+function parseNumberCell(value: string | undefined): number | undefined {
+  if (!value?.trim()) return undefined
+  const n = Number(value)
+  return Number.isFinite(n) ? n : undefined
+}
+
+function normalizeHomeMod(value: unknown): HomeMod | undefined {
+  if (typeof value !== "string") return undefined
+  const normalized = value.trim().toUpperCase()
+  return ["NM", "HD", "HR", "DT", "FM"].includes(normalized) ? normalized as HomeMod : undefined
+}
+
+function opponentOf(player: string, playerA: string, playerB: string): string {
+  return player.trim().toLowerCase() === playerA.trim().toLowerCase() ? playerB : playerA
+}
+
+function defaultFlowState(matchId: string, hasLobby: boolean): MatchFlowState {
+  return {
+    matchId,
+    phase: hasLobby ? "roll" : "lobby",
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function matchFlowFromRecord(record: SheetRecord, matchId: string, hasLobby: boolean): MatchFlowState {
+  const phaseRaw = firstValue(record, ["phase"]) as MatchFlowPhase
+  const phase: MatchFlowPhase = [
+    "lobby",
+    "roll",
+    "order",
+    "home_mod",
+    "ban",
+    "craft",
+    "play",
+    "ready_result",
+    "completed",
+  ].includes(phaseRaw) ? phaseRaw : defaultFlowState(matchId, hasLobby).phase
+
+  return {
+    matchId,
+    phase,
+    rollA: parseNumberCell(firstValue(record, ["roll_a", "rolla"])),
+    rollB: parseNumberCell(firstValue(record, ["roll_b", "rollb"])),
+    rollWinner: firstValue(record, ["roll_winner", "rollwinner"]) || undefined,
+    firstPicker: firstValue(record, ["first_picker", "firstpicker"]) || undefined,
+    firstBanner: firstValue(record, ["first_banner", "firstbanner"]) || undefined,
+    turnPlayer: firstValue(record, ["turn_player", "turnplayer"]) || undefined,
+    homeModA: normalizeHomeMod(firstValue(record, ["home_mod_a", "homemoda"])),
+    homeModB: normalizeHomeMod(firstValue(record, ["home_mod_b", "homemodb"])),
+    currentSlot: firstValue(record, ["current_slot", "currentslot"]) || undefined,
+    updatedAt: firstValue(record, ["updated_at", "updatedat"]) || undefined,
+  }
+}
+
+async function getMatchFlowState(env: Bindings, matchId: string, hasLobby = true): Promise<MatchFlowState> {
+  const values = await getSheetValuesSafe(env, `${MATCH_STATE_SHEET}!A1:Z`)
+  const records = sheetRowsToRecords(values)
+  const record = records.find((r) => firstValue(r, ["match_id", "id"]) === matchId)
+  return record ? matchFlowFromRecord(record, matchId, hasLobby) : defaultFlowState(matchId, hasLobby)
+}
+
+async function writeMatchFlowState(env: Bindings, state: MatchFlowState): Promise<MatchFlowState> {
+  await ensureSheetWithHeaders(env, MATCH_STATE_SHEET, MATCH_STATE_HEADERS)
+  const values = await getSheetValuesSafe(env, `${MATCH_STATE_SHEET}!A1:Z`)
+  const [headersRaw, ...rows] = values
+  const headers = headersRaw?.map(normalizeHeader) ?? [...MATCH_STATE_HEADERS]
+  const matchIdIdx = headers.indexOf("match_id")
+  const rowIdx = rows.findIndex((row) => row[matchIdIdx]?.trim() === state.matchId)
+  const nextState: MatchFlowState = { ...state, updatedAt: new Date().toISOString() }
+  const cellValue = (header: string): string => {
+    switch (header) {
+      case "match_id": return nextState.matchId
+      case "phase": return nextState.phase
+      case "roll_a": return nextState.rollA == null ? "" : String(nextState.rollA)
+      case "roll_b": return nextState.rollB == null ? "" : String(nextState.rollB)
+      case "roll_winner": return nextState.rollWinner ?? ""
+      case "first_picker": return nextState.firstPicker ?? ""
+      case "first_banner": return nextState.firstBanner ?? ""
+      case "turn_player": return nextState.turnPlayer ?? ""
+      case "home_mod_a": return nextState.homeModA ?? ""
+      case "home_mod_b": return nextState.homeModB ?? ""
+      case "current_slot": return nextState.currentSlot ?? ""
+      case "updated_at": return nextState.updatedAt ?? ""
+      default: return ""
+    }
+  }
+
+  if (rowIdx >= 0) {
+    const rowNum = rowIdx + 2
+    await batchUpdateValues(env, headers.map((header, i) => ({
+      range: `${MATCH_STATE_SHEET}!${colLetter(i)}${rowNum}`,
+      values: [[cellValue(header)]],
+    })))
+  } else {
+    await appendSheetRow(env, MATCH_STATE_SHEET, headers.map(cellValue))
+  }
+
+  return nextState
+}
+
+function orderedPlayersFromPattern(patternRaw: string, firstPlayer: string, secondPlayer: string): string[] {
+  const pattern = (patternRaw || DEFAULT_BAN_ORDER).toUpperCase().replace(/[^AB12]/g, "")
+  return Array.from(pattern || DEFAULT_BAN_ORDER).map((token) =>
+    token === "A" || token === "1" ? firstPlayer : secondPlayer
+  )
+}
+
+function countCompletedWins(matchMaps: SheetRecord[], matchId: string, player: string): number {
+  return matchMaps.filter((r) =>
+    firstValue(r, ["match_id"]) === matchId &&
+    firstValue(r, ["status"]).toLowerCase() === "completed" &&
+    firstValue(r, ["winner"]).toLowerCase() === player.toLowerCase()
+  ).length
+}
+
+async function getMatchById(env: Bindings, matchId: string): Promise<ApiMatch | null> {
+  const matches = await getMatches(env)
+  return matches.find((match) => match.id === matchId) ?? null
+}
+
+function parseInventoryRecord(record?: SheetRecord): InventoryMap {
+  return Object.fromEntries(
+    INVENTORY_KEYS.map((key) => [key, Math.max(0, Number(record?.[key] ?? 0) || 0)])
+  ) as InventoryMap
+}
+
+async function writeInventoryAbsolute(
+  env: Bindings,
+  matchId: string,
+  player: string,
+  inventory: InventoryMap,
+  actor: string,
+  auditAction = "inventory_update",
+): Promise<InventoryMap> {
+  await ensureSheetWithHeaders(env, "inventory", ["match_id", "player", ...INVENTORY_KEYS])
+  const inventoryValues = await getSheetValuesSafe(env, "inventory!A1:Z")
+  const [rawHeaders, ...rows] = inventoryValues
+  if (!rawHeaders) throw new Error("Inventory sheet empty")
+
+  const headers = rawHeaders.map(normalizeHeader)
+  const matchIdIdx = headers.indexOf("match_id")
+  const playerIdx = headers.indexOf("player")
+  if (matchIdIdx < 0 || playerIdx < 0) {
+    throw new Error("Inventory sheet missing required columns")
+  }
+
+  const rowIdx = rows.findIndex(
+    (row) => row[matchIdIdx]?.trim() === matchId && row[playerIdx]?.trim().toLowerCase() === player.toLowerCase()
+  )
+  const afterJson = JSON.stringify(inventory)
+
+  if (rowIdx >= 0) {
+    const rowNum = rowIdx + 2
+    await batchUpdateValues(env, INVENTORY_KEYS.map((key) => {
+      const colIdx = headers.indexOf(key)
+      return colIdx >= 0 ? { range: `inventory!${colLetter(colIdx)}${rowNum}`, values: [[String(inventory[key])]] } : null
+    }).filter((write): write is { range: string; values: string[][] } => write !== null))
+  } else {
+    const row = rawHeaders.map((_, i) => {
+      const header = headers[i]
+      if (header === "match_id") return matchId
+      if (header === "player") return player
+      const key = INVENTORY_KEYS.find((candidate) => candidate === header)
+      return key ? String(inventory[key]) : ""
+    })
+    await appendSheetRow(env, "inventory", row)
+  }
+
+  await appendAuditLog(env, actor, auditAction, "inventory", `${matchId}:${player}`, "{}", afterJson).catch(() => {})
+  return inventory
+}
+
+async function applyInventoryDelta(
+  env: Bindings,
+  matchId: string,
+  player: string,
+  delta: Partial<InventoryMap>,
+  actor: string,
+  auditAction = "inventory_delta",
+): Promise<InventoryMap> {
+  const records = sheetRowsToRecords(await getSheetValuesSafe(env, "inventory!A1:Z"))
+  const current = parseInventoryRecord(records.find((record) =>
+    firstValue(record, ["match_id"]) === matchId &&
+    firstValue(record, ["player"]).toLowerCase() === player.toLowerCase()
+  ))
+  for (const [key, rawDelta] of Object.entries(delta) as [keyof InventoryMap, number][]) {
+    current[key] = Math.max(0, current[key] + rawDelta)
+  }
+  return writeInventoryAbsolute(env, matchId, player, current, actor, auditAction)
+}
+
+function getMapPoolForSlot(poolRecords: SheetRecord[], slot: string): string {
+  const record = poolRecords.find((r) => firstValue(r, ["map_id", "slot"]).toLowerCase() === slot.toLowerCase())
+  return firstValue(record ?? {}, ["mod_pool", "pool"]).toUpperCase()
+}
+
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname
   if (path === "/api/health" || path.startsWith("/api/public/") || path.startsWith("/api/auth/")) {
@@ -1226,6 +1531,370 @@ app.put("/api/match/:matchId/inventory", async (c) => {
   }
 })
 
+app.get("/api/match/:matchId/state", async (c) => {
+  const matchId = c.req.param("matchId")
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    const state = await getMatchFlowState(c.env, matchId, Boolean(match?.lobbyUrl))
+    return c.json({ state })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load match state" }, 500)
+  }
+})
+
+app.post("/api/match/:matchId/state", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const action = typeof body.action === "string" ? body.action : ""
+
+  // #TEST-MODE-START
+  const configMap = await getConfigMap(c.env)
+  if (isTestMode(configMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const state = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    let nextState: MatchFlowState = state
+
+    if (action === "record_rolls") {
+      const rollA = Number(body.rollA)
+      const rollB = Number(body.rollB)
+      if (!Number.isFinite(rollA) || !Number.isFinite(rollB)) {
+        return c.json({ error: "rollA and rollB required" }, 400)
+      }
+      if (rollA === rollB) {
+        nextState = { ...state, phase: "roll", rollA, rollB, rollWinner: undefined, turnPlayer: undefined }
+      } else {
+        const rollWinner = rollA > rollB ? match.playerA : match.playerB
+        nextState = { ...state, phase: "order", rollA, rollB, rollWinner, turnPlayer: rollWinner }
+      }
+    } else if (action === "choose_order") {
+      const choice = typeof body.choice === "string" ? body.choice : ""
+      const chooser = state.rollWinner
+      if (!chooser) return c.json({ error: "Roll winner is required before choosing order" }, 400)
+      if (choice !== "pick_first" && choice !== "ban_first") {
+        return c.json({ error: "choice must be pick_first or ban_first" }, 400)
+      }
+      const other = opponentOf(chooser, match.playerA, match.playerB)
+      const firstPicker = choice === "pick_first" ? chooser : other
+      const firstBanner = choice === "ban_first" ? chooser : other
+      nextState = { ...state, phase: "home_mod", firstPicker, firstBanner, turnPlayer: firstPicker }
+    } else if (action === "set_home_mod") {
+      const player = typeof body.player === "string" ? body.player.trim() : ""
+      const homeMod = normalizeHomeMod(body.homeMod)
+      if (!player || !homeMod) return c.json({ error: "player and valid homeMod required" }, 400)
+      if (state.phase !== "home_mod") return c.json({ error: "Home mods are not open right now" }, 409)
+      if (state.turnPlayer && state.turnPlayer.toLowerCase() !== player.toLowerCase()) {
+        return c.json({ error: `${state.turnPlayer} must choose home mod next` }, 409)
+      }
+      const isA = player.toLowerCase() === match.playerA.toLowerCase()
+      const updated: MatchFlowState = { ...state, ...(isA ? { homeModA: homeMod } : { homeModB: homeMod }) }
+      const other = opponentOf(player, match.playerA, match.playerB)
+      const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? updated.homeModA : updated.homeModB
+      if (!otherHasHomeMod) {
+        nextState = { ...updated, phase: "home_mod", turnPlayer: other }
+      } else {
+        nextState = { ...updated, phase: "ban", turnPlayer: updated.firstBanner }
+      }
+    } else {
+      return c.json({ error: "Unknown state action" }, 400)
+    }
+
+    const saved = await writeMatchFlowState(c.env, nextState)
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      `match_state_${action}`,
+      "match_state",
+      matchId,
+      JSON.stringify(state),
+      JSON.stringify(saved),
+    ).catch(() => {})
+    return c.json({ ok: true, state: saved })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to update match state" }, 500)
+  }
+})
+
+app.post("/api/match/:matchId/score", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const slot = typeof body.slot === "string" ? body.slot.trim() : ""
+  const winner = typeof body.winner === "string" ? body.winner.trim() : ""
+  const playerA = typeof body.playerA === "string" ? body.playerA.trim() : ""
+  const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
+  const scoreA = Number(body.scoreA)
+  const scoreB = Number(body.scoreB)
+  if (!slot || !winner || !playerA || !playerB || !Number.isFinite(scoreA) || !Number.isFinite(scoreB)) {
+    return c.json({ error: "slot, winner, playerA, playerB, scoreA, and scoreB required" }, 400)
+  }
+  if (winner !== playerA && winner !== playerB) {
+    return c.json({ error: "winner must be one of the match players" }, 400)
+  }
+
+  // #TEST-MODE-START
+  const scoreCfgMap = await getConfigMap(c.env)
+  if (isTestMode(scoreCfgMap)) {
+    return c.json({ ok: true, simulated: true, slot, winner, scoreA, scoreB })
+  }
+  // #TEST-MODE-END
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    const matchMapsValues = await getSheetValues(c.env, "match_maps!A1:Z")
+    const [headers, ...rows] = matchMapsValues
+    if (!headers) return c.json({ error: "match_maps sheet empty" }, 500)
+    const norm = headers.map(normalizeHeader)
+    const idx = (name: string) => norm.indexOf(name)
+    const matchIdIdx = idx("match_id")
+    const slotIdx = idx("slot")
+    const mapIdIdx = idx("map_id")
+    const scoreAIdx = idx("score_a")
+    const scoreBIdx = idx("score_b")
+    const winnerIdx = idx("winner")
+    const statusIdx = idx("status")
+    const existingRowIdx = rows.findIndex((row) => row[matchIdIdx]?.trim() === matchId && row[slotIdx]?.trim() === slot)
+    const beforeRow = existingRowIdx >= 0 ? rows[existingRowIdx] : undefined
+    const beforeJson = beforeRow ? JSON.stringify(beforeRow) : "{}"
+    const wasCompleted = beforeRow?.[statusIdx]?.trim().toLowerCase() === "completed"
+
+    if (existingRowIdx >= 0) {
+      const rowNum = existingRowIdx + 2
+      await batchUpdateValues(c.env, [
+        scoreAIdx >= 0 ? { range: `match_maps!${colLetter(scoreAIdx)}${rowNum}`, values: [[String(scoreA)]] } : null,
+        scoreBIdx >= 0 ? { range: `match_maps!${colLetter(scoreBIdx)}${rowNum}`, values: [[String(scoreB)]] } : null,
+        winnerIdx >= 0 ? { range: `match_maps!${colLetter(winnerIdx)}${rowNum}`, values: [[winner]] } : null,
+        statusIdx >= 0 ? { range: `match_maps!${colLetter(statusIdx)}${rowNum}`, values: [["completed"]] } : null,
+      ].filter((write): write is { range: string; values: string[][] } => write !== null))
+    } else {
+      const newRow = new Array(Math.max(norm.length, 9)).fill("")
+      if (matchIdIdx >= 0) newRow[matchIdIdx] = matchId
+      if (slotIdx >= 0) newRow[slotIdx] = slot
+      if (mapIdIdx >= 0) newRow[mapIdIdx] = slot
+      if (scoreAIdx >= 0) newRow[scoreAIdx] = String(scoreA)
+      if (scoreBIdx >= 0) newRow[scoreBIdx] = String(scoreB)
+      if (winnerIdx >= 0) newRow[winnerIdx] = winner
+      if (statusIdx >= 0) newRow[statusIdx] = "completed"
+      await appendSheetRow(c.env, "match_maps", newRow)
+    }
+
+    const matchMapRecordsBefore = sheetRowsToRecords(matchMapsValues)
+    const totals = {
+      scoreA: countCompletedWins(matchMapRecordsBefore, matchId, playerA) + (!wasCompleted && winner === playerA ? 1 : 0),
+      scoreB: countCompletedWins(matchMapRecordsBefore, matchId, playerB) + (!wasCompleted && winner === playerB ? 1 : 0),
+    }
+
+    const poolRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "mappool!A1:Z"))
+    const pool = getMapPoolForSlot(poolRecords, slot)
+    const ingredient = POOL_TO_INGREDIENT[pool]
+    let inventory: InventoryMap | undefined
+    if (ingredient && !wasCompleted) {
+      inventory = await applyInventoryDelta(c.env, matchId, winner, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "map_win_ingredient")
+    }
+
+    const winsNeeded = Math.ceil((match?.bestOf ?? 5) / 2)
+    const matchOver = totals.scoreA >= winsNeeded || totals.scoreB >= winsNeeded
+    const flowState = await writeMatchFlowState(c.env, {
+      ...(await getMatchFlowState(c.env, matchId, Boolean(match?.lobbyUrl))),
+      phase: matchOver ? "ready_result" : "craft",
+      turnPlayer: matchOver ? undefined : opponentOf(winner, playerA, playerB),
+      currentSlot: undefined,
+    })
+
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      "score",
+      "match_map",
+      `${matchId}:${slot}`,
+      beforeJson,
+      JSON.stringify({ slot, scoreA, scoreB, winner, status: "completed", pool, ingredient }),
+    ).catch(() => {})
+
+    return c.json({ ok: true, slot, scoreA, scoreB, winner, totals, pool, ingredient, inventory, state: flowState })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Score update failed" }, 500)
+  }
+})
+
+app.post("/api/match/:matchId/post-result", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const playerA = typeof body.playerA === "string" ? body.playerA.trim() : ""
+  const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
+  if (!playerA || !playerB) return c.json({ error: "playerA and playerB required" }, 400)
+
+  // #TEST-MODE-START
+  const postResultCfgMap = await getConfigMap(c.env)
+  if (isTestMode(postResultCfgMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
+
+  try {
+    const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
+    const scoreA = Number(body.scoreA ?? countCompletedWins(matchMapRecords, matchId, playerA))
+    const scoreB = Number(body.scoreB ?? countCompletedWins(matchMapRecords, matchId, playerB))
+    const winner = typeof body.winner === "string" && body.winner.trim()
+      ? body.winner.trim()
+      : scoreA > scoreB ? playerA : playerB
+    if (winner !== playerA && winner !== playerB) return c.json({ error: "winner must be one of the match players" }, 400)
+
+    const before = await getMatchById(c.env, matchId)
+    await updateMatchFields(c.env, matchId, {
+      status: "completed",
+      winner,
+      score_a: String(scoreA),
+      score_b: String(scoreB),
+    })
+    const state = await writeMatchFlowState(c.env, {
+      ...(await getMatchFlowState(c.env, matchId, Boolean(before?.lobbyUrl))),
+      phase: "completed",
+      turnPlayer: undefined,
+      currentSlot: undefined,
+    })
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      "post_result",
+      "match",
+      matchId,
+      JSON.stringify(before ?? {}),
+      JSON.stringify({ status: "completed", winner, scoreA, scoreB }),
+    ).catch(() => {})
+    return c.json({ ok: true, winner, scoreA, scoreB, state })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Post result failed" }, 500)
+  }
+})
+
+app.post("/api/match/:matchId/recipe", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const player = typeof body.player === "string" ? body.player.trim() : ""
+  const recipeIdRaw = String(body.recipeId ?? "").trim()
+  const target = typeof body.target === "string" ? body.target.trim() : ""
+  if (!player || !recipeIdRaw) return c.json({ error: "player and recipeId required" }, 400)
+
+  // #TEST-MODE-START
+  const recipeCfgMap = await getConfigMap(c.env)
+  if (isTestMode(recipeCfgMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
+
+  try {
+    const itemRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "items!A1:Z"))
+    const recipeId = recipeIdRaw.startsWith("item_") ? recipeIdRaw : `item_${recipeIdRaw}`
+    const item = itemRecords.find((record) => firstValue(record, ["item_id", "id"]) === recipeId)
+    if (!item) return c.json({ error: "Recipe not found" }, 404)
+    if (firstValue(item, ["enabled"]).toLowerCase() === "false") return c.json({ error: "Recipe disabled" }, 409)
+    const timing = firstValue(item, ["timing"]).toLowerCase().replace(/[\s-]+/g, "_")
+    const flowState = await getMatchFlowState(c.env, matchId, true)
+    const timingOpen =
+      timing === "any" ||
+      (timing === "ban_phase" && flowState.phase === "ban") ||
+      (timing === "pick_phase" && flowState.phase === "craft") ||
+      (timing === "before_map" && flowState.phase === "craft") ||
+      (timing === "after_score" && (flowState.phase === "craft" || flowState.phase === "ready_result"))
+    if (!timingOpen) {
+      return c.json({ error: `${firstValue(item, ["name"]) || "Recipe"} cannot be used during ${flowState.phase}` }, 409)
+    }
+
+    const cost = Object.fromEntries(INVENTORY_KEYS.map((key) => [
+      key,
+      Math.max(0, Number(firstValue(item, [`cost_${key}`, key])) || 0),
+    ])) as InventoryMap
+    const inventoryRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "inventory!A1:Z"))
+    const current = parseInventoryRecord(inventoryRecords.find((record) =>
+      firstValue(record, ["match_id"]) === matchId &&
+      firstValue(record, ["player"]).toLowerCase() === player.toLowerCase()
+    ))
+    const missing = INVENTORY_KEYS.filter((key) => current[key] < cost[key])
+    if (missing.length > 0) return c.json({ error: "Not enough ingredients", missing }, 409)
+
+    const next = { ...current }
+    for (const key of INVENTORY_KEYS) next[key] -= cost[key]
+    const inventory = await writeInventoryAbsolute(c.env, matchId, player, next, sessionUser?.username ?? "unknown", "recipe_cost")
+    const eventId = randomHex(8)
+    const effectType = firstValue(item, ["effect_type"])
+    const effectPayload = firstValue(item, ["effect_payload", "payload"]) || "{}"
+    await ensureSheetWithHeaders(c.env, "item_events", [
+      "event_id",
+      "match_id",
+      "player",
+      "item_id",
+      "action",
+      "target",
+      "payload",
+      "created_by",
+      "created_at",
+      "reverted_at",
+    ])
+    await appendSheetRow(c.env, "item_events", [
+      eventId,
+      matchId,
+      player,
+      recipeId,
+      "use",
+      target,
+      effectPayload,
+      sessionUser?.username ?? "unknown",
+      new Date().toISOString(),
+      "",
+    ])
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      "recipe_use",
+      "item_event",
+      eventId,
+      JSON.stringify({ inventory: current }),
+      JSON.stringify({ recipeId, player, target, effectType, effectPayload, inventory }),
+    ).catch(() => {})
+    return c.json({ ok: true, eventId, recipeId, player, target, effectType, effectPayload, inventory })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Recipe use failed" }, 500)
+  }
+})
+
 app.get("/api/health", (c) => {
   return c.json({
     ok: true,
@@ -1434,7 +2103,9 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
           const m = ev.message.match(/https:\/\/osu\.ppy\.sh\/mp\/(\d+)/)
           if (m) lobbyUrl = `https://osu.ppy.sh/mp/${m[1]}`
         }
-      } catch {}
+      } catch {
+        // Ignore malformed relay events while waiting for BanchoBot.
+      }
       if (lobbyUrl) break
     }
   }
@@ -1675,7 +2346,9 @@ app.post("/api/match/:matchId/join-lobby", async (c) => {
           try {
             const ev = JSON.parse(line.slice(6)) as { from?: string; message?: string }
             if (ev.from === "BanchoBot") { alive = true; break outer }
-          } catch {}
+          } catch {
+            // Ignore malformed relay events during the liveness probe.
+          }
         }
       }
       reader.cancel()
@@ -1685,7 +2358,9 @@ app.post("/api/match/:matchId/join-lobby", async (c) => {
   // Write lobby_url to Sheets regardless (best-effort)
   try {
     await updateMatchField(c.env, matchId, "lobby_url", lobbyUrl)
-  } catch {}
+  } catch {
+    // Best-effort Sheet write; the caller still gets the lobby validation result.
+  }
 
   return c.json({ ok: true, alive, lobbyUrl, channel })
 })
@@ -1694,7 +2369,7 @@ app.post("/api/match/:matchId/action", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
 
-  let body: { action?: string; player?: string; slot?: string }
+  let body: { action?: string; player?: string; slot?: string; manualOrder?: boolean }
   try {
     body = await c.req.json()
   } catch {
@@ -1702,6 +2377,7 @@ app.post("/api/match/:matchId/action", async (c) => {
   }
 
   const { action, player, slot } = body
+  const manualOrder = body.manualOrder === true
   if (!action || !player || !slot) {
     return c.json({ error: "action, player, and slot required" }, 400)
   }
@@ -1719,6 +2395,29 @@ app.post("/api/match/:matchId/action", async (c) => {
   // #TEST-MODE-END
 
   try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const flowState = manualOrder ? undefined : await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const samePlayer = (a?: string, b?: string) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase()
+
+    if (!manualOrder && flowState && action === "ban") {
+      if (flowState.phase !== "ban") {
+        return c.json({ error: `Ban phase is not open (${flowState.phase})` }, 409)
+      }
+      if (!samePlayer(flowState.turnPlayer, player)) {
+        return c.json({ error: `${flowState.turnPlayer ?? "Next player"} must ban next` }, 409)
+      }
+    }
+
+    if (!manualOrder && flowState && action === "pick") {
+      if (flowState.phase !== "craft") {
+        return c.json({ error: `Pick phase is not open (${flowState.phase})` }, 409)
+      }
+      if (!samePlayer(flowState.turnPlayer, player)) {
+        return c.json({ error: `${flowState.turnPlayer ?? "Next player"} must pick next` }, 409)
+      }
+    }
+
     const matchMapsValues = await getSheetValues(c.env, "match_maps!A1:Z")
     const [headers, ...rows] = matchMapsValues
     if (!headers) return c.json({ error: "match_maps sheet empty" }, 500)
@@ -1761,7 +2460,41 @@ app.post("/api/match/:matchId/action", async (c) => {
       await appendSheetRow(c.env, "match_maps", newRow)
     }
 
-    const afterState = { matchId, slot, action, player, status }
+    let nextFlowState: MatchFlowState | undefined
+    if (!manualOrder && flowState && action === "ban") {
+      const mapRecords = sheetRowsToRecords(matchMapsValues)
+      const completedBans = mapRecords.filter((r) =>
+        firstValue(r, ["match_id"]) === matchId &&
+        firstValue(r, ["status"]).toLowerCase() === "banned"
+      ).length + 1
+      const firstBanner = flowState.firstBanner ?? player
+      const secondBanner = opponentOf(firstBanner, match.playerA, match.playerB)
+      const banOrder = orderedPlayersFromPattern(actionCfgMap.get("ban order") ?? DEFAULT_BAN_ORDER, firstBanner, secondBanner)
+      if (completedBans < banOrder.length) {
+        nextFlowState = await writeMatchFlowState(c.env, {
+          ...flowState,
+          phase: "ban",
+          turnPlayer: banOrder[completedBans],
+          currentSlot: undefined,
+        })
+      } else {
+        nextFlowState = await writeMatchFlowState(c.env, {
+          ...flowState,
+          phase: "craft",
+          turnPlayer: flowState.firstPicker ?? opponentOf(firstBanner, match.playerA, match.playerB),
+          currentSlot: undefined,
+        })
+      }
+    } else if (!manualOrder && flowState && action === "pick") {
+      nextFlowState = await writeMatchFlowState(c.env, {
+        ...flowState,
+        phase: "play",
+        turnPlayer: player,
+        currentSlot: slot,
+      })
+    }
+
+    const afterState = { matchId, slot, action, player, status, manualOrder }
     await appendAuditLog(
       c.env,
       sessionUser?.username ?? "unknown",
@@ -1772,7 +2505,7 @@ app.post("/api/match/:matchId/action", async (c) => {
       JSON.stringify(afterState),
     ).catch(() => {})
 
-    return c.json({ ok: true, slot, action, player, status })
+    return c.json({ ok: true, slot, action, player, status, state: nextFlowState, manualOrder })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Action failed" }, 500)
   }

@@ -22,13 +22,14 @@ interface Props {
   playerBOsuId?: string
   isDemo?: boolean
   isTestMode?: boolean
+  nextActionHint?: string
   simulatedMessages?: LiveMsg[]
   onMessagesChange?: (msgs: LiveMsg[]) => void
   onNewMessage?: (msg: LiveMsg) => void
 }
 
 export const IrcChat = forwardRef<IrcChatHandle, Props>(function IrcChat(
-  { channel, refName, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, isTestMode = false, simulatedMessages, onMessagesChange, onNewMessage },
+  { channel, refName, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, isTestMode = false, nextActionHint, simulatedMessages, onMessagesChange, onNewMessage },
   ref
 ) {
   const [messages, setMessages] = useState<LiveMsg[]>([])
@@ -57,13 +58,15 @@ export const IrcChat = forwardRef<IrcChatHandle, Props>(function IrcChat(
         const msg = JSON.parse(e.data as string) as LiveMsg
         setMessages((prev) => [...prev, msg])
         onNewMessage?.(msg)
-      } catch {}
+      } catch {
+        // Ignore malformed SSE payloads without dropping the stream.
+      }
     }
     return () => {
       es.close()
       setConnected(false)
     }
-  }, [channel, isTestMode])
+  }, [channel, isTestMode, onNewMessage])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -153,6 +156,13 @@ async function send(override?: string) {
           </span>
         )}
       </div>
+
+      {nextActionHint && (
+        <div className="flex-shrink-0 border-b border-border bg-primary/5 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Next action</p>
+          <p className="mt-0.5 text-xs text-foreground">{nextActionHint}</p>
+        </div>
+      )}
 
       {/* Message list */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1 text-xs font-mono">

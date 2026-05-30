@@ -3,7 +3,17 @@ import { Separator } from "@/components/ui/separator"
 import { INGREDIENTS } from "@/data/constants"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
-import type { IngKey, Inventory } from "@/types"
+import type { IngKey, Inventory, MatchFlowPhase, Recipe } from "@/types"
+
+function isRecipeTimingOpen(recipe: Recipe, phase?: MatchFlowPhase): boolean {
+  if (!phase) return false
+  const timing = recipe.timing.toLowerCase().replace(/[\s-]+/g, "_")
+  return timing === "any" ||
+    (timing === "ban_phase" && phase === "ban") ||
+    (timing === "pick_phase" && phase === "craft") ||
+    (timing === "before_map" && phase === "craft") ||
+    (timing === "after_score" && (phase === "craft" || phase === "ready_result"))
+}
 
 function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
   return (
@@ -36,7 +46,7 @@ function IngredientBar({ inv }: { inv: Inventory }) {
   )
 }
 
-function RecipeList({ inv, label }: { inv: Inventory; label: string }) {
+function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label: string; phase?: MatchFlowPhase; onUseRecipe?: (recipeId: number) => void }) {
   const affordable = RECIPES.filter((r) => canAfford(r, inv))
   const locked     = RECIPES.filter((r) => !canAfford(r, inv))
 
@@ -62,7 +72,15 @@ function RecipeList({ inv, label }: { inv: Inventory; label: string }) {
                     <span className="text-xs text-muted-foreground/70">· {r.timing}</span>
                   </div>
                 </div>
-                <Button size="sm" className="flex-shrink-0 text-xs" variant="secondary">Use</Button>
+                <Button
+                  size="sm"
+                  className="flex-shrink-0 text-xs"
+                  variant="secondary"
+                  disabled={!isRecipeTimingOpen(r, phase)}
+                  onClick={() => onUseRecipe?.(r.id)}
+                >
+                  Use
+                </Button>
               </div>
             </div>
           ))}
@@ -93,14 +111,16 @@ interface Props {
   invB: Inventory
   labelA: string
   labelB: string
+  phase?: MatchFlowPhase
+  onUseRecipe?: (player: string, recipeId: number) => void
 }
 
-export function RecipePanel({ invA, invB, labelA, labelB }: Props) {
+export function RecipePanel({ invA, invB, labelA, labelB, phase, onUseRecipe }: Props) {
   return (
     <div className="space-y-6">
-      <RecipeList inv={invA} label={labelA} />
+      <RecipeList inv={invA} label={labelA} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelA, recipeId)} />
       <Separator />
-      <RecipeList inv={invB} label={labelB} />
+      <RecipeList inv={invB} label={labelB} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelB, recipeId)} />
     </div>
   )
 }

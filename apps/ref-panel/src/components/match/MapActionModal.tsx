@@ -9,11 +9,17 @@ interface Props {
   map: PoolMap | null
   playerA: string
   playerB: string
+  allowedActions?: Action[]
+  expectedPlayer?: string
+  helperText?: string
   onClose: () => void
   onAction: (action: Action, player: string) => void
 }
 
-export function MapActionModal({ map, playerA, playerB, onClose, onAction }: Props) {
+export function MapActionModal({ map, playerA, playerB, allowedActions, expectedPlayer, helperText, onClose, onAction }: Props) {
+  const actions = allowedActions ?? ["pick", "ban", "protect"]
+  const players = expectedPlayer ? [expectedPlayer] : [playerA, playerB]
+
   return (
     <Dialog.Root open={map !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <Dialog.Portal>
@@ -32,25 +38,26 @@ export function MapActionModal({ map, playerA, playerB, onClose, onAction }: Pro
               </Dialog.Title>
 
               <div className="mt-4 space-y-2">
-                {(["pick", "ban", "protect"] as const).map((action) => (
+                {helperText && <p className="text-xs text-muted-foreground">{helperText}</p>}
+                {actions.length === 0 && (
+                  <p className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    No map action is open in the current phase.
+                  </p>
+                )}
+                {actions.map((action) => (
                   <div key={action} className="flex items-center gap-2">
                     <span className="w-14 text-xs capitalize text-muted-foreground">{action}</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1 text-xs"
-                      onClick={() => { onAction(action, playerA); onClose() }}
-                    >
-                      {playerA}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1 text-xs"
-                      onClick={() => { onAction(action, playerB); onClose() }}
-                    >
-                      {playerB}
-                    </Button>
+                    {players.map((player) => (
+                      <Button
+                        key={`${action}-${player}`}
+                        size="sm"
+                        variant="outline"
+                        className="flex-1 text-xs"
+                        onClick={() => { onAction(action, player); onClose() }}
+                      >
+                        {player}
+                      </Button>
+                    ))}
                   </div>
                 ))}
               </div>

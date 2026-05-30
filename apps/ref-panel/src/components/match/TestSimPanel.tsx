@@ -11,7 +11,7 @@ interface Props {
   mappool: PoolMap[] | null
   channel: string | undefined
   onInjectMessage: (from: string, message: string, local?: boolean) => void
-  onGameResult: (slot: string, winner: string) => void
+  onGameResult: (slot: string, winner: string, scoreA: number, scoreB: number) => void
   onUnlockPostResult: () => void
 }
 
@@ -72,7 +72,12 @@ export function TestSimPanel({
     }, 350)
 
     setResultedSlots(prev => new Set([...prev, slot]))
-    onGameResult(slot, winner)
+    onGameResult(
+      slot,
+      winner,
+      winner === playerA ? winScore : loseScore,
+      winner === playerB ? winScore : loseScore,
+    )
   }
 
   return (

@@ -3,6 +3,17 @@ export type MapStatus = "available" | "picked" | "banned" | "protected" | "in-pr
 export type MatchStatus = "scheduled" | "upcoming" | "live" | "completed" | "forfeit"
 export type IngKey = "egg" | "sugar" | "butter" | "flour" | "milk"
 export type Inventory = Record<IngKey, number>
+export type HomeMod = "NM" | "HD" | "HR" | "DT" | "FM"
+export type MatchFlowPhase =
+  | "lobby"
+  | "roll"
+  | "order"
+  | "home_mod"
+  | "ban"
+  | "craft"
+  | "play"
+  | "ready_result"
+  | "completed"
 
 export interface PoolMap {
   slot: string
@@ -24,6 +35,21 @@ export interface Recipe {
   desc: string
   cost: Partial<Inventory>
   timing: string
+}
+
+export interface MatchFlowState {
+  matchId: string
+  phase: MatchFlowPhase
+  rollA?: number
+  rollB?: number
+  rollWinner?: string
+  firstPicker?: string
+  firstBanner?: string
+  turnPlayer?: string
+  homeModA?: HomeMod
+  homeModB?: HomeMod
+  currentSlot?: string
+  updatedAt?: string
 }
 
 export interface Match {

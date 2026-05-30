@@ -6,8 +6,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { INGREDIENTS } from "@/data/constants"
-import type { IngKey, Inventory, MatchStatus } from "@/types"
+import { HOME_MODS, INGREDIENTS } from "@/data/constants"
+import type { HomeMod, IngKey, Inventory, MatchStatus } from "@/types"
 
 function WinBoxes({ score, needed }: { score: number; needed: number }) {
   return (
@@ -69,6 +69,45 @@ function IngredientBar({ inv, editing, onChange, onToggleEdit }: { inv: Inventor
   )
 }
 
+function HomeModControl({
+  value,
+  canChoose,
+  onSelect,
+}: {
+  value?: HomeMod
+  canChoose?: boolean
+  onSelect?: (homeMod: HomeMod) => void
+}) {
+  return (
+    <div className="mt-2 rounded-md border border-border/60 bg-card/35 px-2 py-2">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Home mod</span>
+        <span className="font-mono text-[10px] font-semibold text-foreground">{value ?? "Unset"}</span>
+      </div>
+      {canChoose && (
+        <div className="grid grid-cols-5 gap-1">
+          {HOME_MODS.map((mod) => {
+            const selected = value === mod.key
+            return (
+              <button
+                key={mod.key}
+                type="button"
+                className={`h-6 rounded border px-0.5 font-mono text-[10px] transition-colors ${
+                  selected ? "bg-muted text-foreground" : "bg-background text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                }`}
+                style={{ borderColor: selected ? mod.hex : `${mod.hex}66` }}
+                onClick={() => onSelect?.(mod.key)}
+              >
+                {mod.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 type LobbyConfirm = "create" | "close" | "result" | "reminder"
 
 interface Props {
@@ -91,9 +130,14 @@ interface Props {
   onPostResult?: () => void
   onSendReminder?: () => void
   onForfeit?: (winner: string) => void
+  homeModA?: HomeMod
+  homeModB?: HomeMod
+  homeModTurnPlayer?: string
+  onHomeModSelect?: (player: string, homeMod: HomeMod) => void
   matchStatus?: MatchStatus
   hasLobby?: boolean
   isDemo?: boolean
+  postResultReady?: boolean
   testResultUnlocked?: boolean
 }
 
@@ -110,7 +154,8 @@ export function PlayerColumn({
   round, refName, streamer,
   onInvAChange, onInvBChange,
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit,
-  matchStatus, hasLobby = false, isDemo = false, testResultUnlocked = false,
+  homeModA, homeModB, homeModTurnPlayer, onHomeModSelect,
+  matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
   const winsNeeded = Math.ceil(bestOf / 2)
   const isFinished = matchStatus === "completed" || matchStatus === "forfeit"
@@ -140,12 +185,17 @@ export function PlayerColumn({
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto">
         {/* Player A */}
-        <div className="space-y-2 border-b border-border p-4">
-          <div className="flex items-baseline justify-between">
-            <span className="font-heading text-sm font-semibold">{playerA}</span>
+        <div className="space-y-2 border-b border-border px-4 pb-4 pt-5">
+          <div className="flex min-h-9 items-start justify-between gap-2">
+            <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerA}</span>
             {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none">{scoreA}</span>}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreA} needed={winsNeeded} />}
+          <HomeModControl
+            value={homeModA}
+            canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerA.toLowerCase()}
+            onSelect={(homeMod) => onHomeModSelect?.(playerA, homeMod)}
+          />
           {invLoading
             ? <Skeleton className="h-14 w-full mt-2" />
             : <IngredientBar inv={invA} editing={editingPlayer === "a"} onChange={isDemo ? undefined : onInvAChange} onToggleEdit={isDemo ? undefined : () => setEditingPlayer(editingPlayer === "a" ? null : "a")} />
@@ -157,12 +207,17 @@ export function PlayerColumn({
         </div>
 
         {/* Player B */}
-        <div className="space-y-2 border-b border-border p-4">
-          <div className="flex items-baseline justify-between">
-            <span className="font-heading text-sm font-semibold">{playerB}</span>
+        <div className="space-y-2 border-b border-border px-4 pb-4 pt-5">
+          <div className="flex min-h-9 items-start justify-between gap-2">
+            <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerB}</span>
             {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none">{scoreB}</span>}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreB} needed={winsNeeded} />}
+          <HomeModControl
+            value={homeModB}
+            canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerB.toLowerCase()}
+            onSelect={(homeMod) => onHomeModSelect?.(playerB, homeMod)}
+          />
           {invLoading
             ? <Skeleton className="h-14 w-full mt-2" />
             : <IngredientBar inv={invB} editing={editingPlayer === "b"} onChange={isDemo ? undefined : onInvBChange} onToggleEdit={isDemo ? undefined : () => setEditingPlayer(editingPlayer === "b" ? null : "b")} />
@@ -209,7 +264,7 @@ export function PlayerColumn({
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || hasLobby} onClick={() => setConfirmAction("reminder")}>Match reminder</Button>
         <Separator className="my-1" />
         {/* Result */}
-        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || (!isFinished && !testResultUnlocked)} onClick={() => setConfirmAction("result")}>Post match result</Button>
+        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || (!isFinished && !postResultReady && !testResultUnlocked)} onClick={() => setConfirmAction("result")}>Post match result</Button>
         <Separator className="my-1" />
         {/* Danger */}
         <Button size="sm" variant="outline" className="w-full text-xs border-destructive/40 text-destructive/80 hover:border-destructive hover:text-destructive hover:bg-destructive/5" disabled={isDemo || isFinished} onClick={() => setForfeitOpen(true)}>Set forfeit</Button>
