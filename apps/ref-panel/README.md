@@ -133,10 +133,10 @@ Current dashboard reads from:
 
 ```text
 matches:
-match_id, round, date, time, player_a, player_b, referee, streamer, status, lobby_url, winner
+match_id, round, date, time, player_a, player_b, referee, streamer, status, lobby_url, winner, score_a, score_b
 
 players:
-player_id, osu_id, name, status
+player_id, osu_id, name, discord_id, status
 ```
 
 `player_a` and `player_b` may be player IDs; the API resolves them through `players`.
@@ -151,24 +151,87 @@ scheduled, upcoming, live, completed, forfeit
 
 Accepted aliases include `in_progress` -> `live` and `ff` -> `forfeit`.
 
+Match control reads and writes these additional tabs when available:
+
+```text
+mappool:
+round, map_id, mod_pool, beatmap_id, title
+
+match_maps:
+match_id, slot, map_id, picked_by, banned_by, status, score_a, score_b, winner
+
+match_state:
+match_id, phase, roll_a, roll_b, roll_winner, first_picker, first_banner,
+home_mod_a, home_mod_b, turn_player, current_slot, updated_at
+
+inventory:
+match_id, player, egg, sugar, butter, flour, milk
+
+items:
+item_id, name, enabled, timing, cost_egg, cost_sugar, cost_butter, cost_flour, cost_milk
+
+item_events:
+event_id, match_id, player, item_id, target, created_at
+
+audit_log:
+created_at, actor, action, entity_type, entity_id, before_json, after_json
+```
+
+Match flow phases are:
+
+```text
+lobby, roll, order, home_mod, ban, craft, play, ready_result, completed
+```
+
 ## API State
 
 Implemented:
 
-| Route | Status |
+| Route | Purpose |
 | --- | --- |
 | `GET /api/matches` | Real Sheets-backed dashboard data |
-| `GET /api/health` | Placeholder health JSON |
+| `GET /api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Loads round mappool plus match-specific pick/ban/completed overrides and current score |
+| `GET /api/match/:matchId/inventory?playerA=&playerB=` | Loads both players' ingredient inventories |
+| `PUT /api/match/:matchId/inventory` | Manually updates one player's inventory; body: `player`, ingredient counts |
+| `GET /api/match/:matchId/state` | Loads persisted match flow state, defaulting to `lobby` or `roll` based on lobby URL |
+| `POST /api/match/:matchId/state` | Advances roll/order/home-mod flow state |
+| `POST /api/match/:matchId/action` | Writes map `pick`, `ban`, or `protect`; strict flow order unless `manualOrder: true` |
+| `POST /api/match/:matchId/score` | Writes map score/winner, marks map completed, awards ingredient, advances flow |
+| `POST /api/match/:matchId/recipe` | Validates recipe timing/cost, deducts inventory, writes item event |
+| `POST /api/match/:matchId/post-result` | Writes final match winner/score and completes flow |
+| `POST /api/match/:matchId/forfeit` | Marks match forfeit and writes loser score as `-1` |
+| `POST /api/match/:matchId/create-lobby` | Creates osu! lobby through IRC relay, writes lobby URL, returns follow-up commands |
+| `POST /api/match/:matchId/join-lobby` | Attaches an existing `mpId`, validates via relay when configured, writes lobby URL |
+| `POST /api/match/:matchId/close-lobby` | Sends `!mp close` and posts chat log to staff webhook when configured |
+| `POST /api/match/:matchId/remind` | Posts Discord reminder using player `discord_id` values |
+| `POST /api/irc/send` | Sends one IRC relay message |
+| `GET /api/irc/stream?channel=` | Proxies IRC relay SSE stream |
+| `GET /api/public/config` | Exposes public tournament config, rules, test mode, and order settings |
+| `GET /api/health` | Health JSON |
 | `GET /api/public/state` | Placeholder public JSON |
 
-Pending:
+`POST /api/match/:matchId/state` supports these actions:
 
-- `GET /api/match/:id`
-- `GET /api/mappool/:round`
-- Match mutations: pick/ban, score entry, winner, lock/unlock
-- Recipe use validation and `item_events` writes
-- Public sanitized state feed
-- IRC relay send/receive
+| `action` | Body fields | Result |
+| --- | --- | --- |
+| `record_rolls` | `rollA`, `rollB` | Stores rolls; tie stays in `roll`, otherwise advances to `order` |
+| `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `home_mod` |
+| `set_home_mod` | `player`, `homeMod` | Stores player home mod; after both choose, advances to `ban` |
+
+`POST /api/match/:matchId/action` body:
+
+```json
+{
+  "action": "pick",
+  "player": "Player Name",
+  "slot": "NM1",
+  "manualOrder": true
+}
+```
+
+When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. When `manualOrder` is `true`, it preserves the old free-action behavior: either player may pick, ban, or protect any available map, and the endpoint does not advance `match_state`.
+
+Most mutation endpoints return `{ ok: true, simulated: true }` without writing Sheets when test mode is enabled in the `config` tab.
 
 ## Frontend State
 
@@ -180,8 +243,12 @@ Dashboard:
 
 Match panel:
 
-- Still uses mock data from `src/data/mock.ts`.
-- Needs real match-detail and mappool endpoints before replacing mocks.
+- Loads mappool, inventory, config, and match flow state from the API on mount.
+- Keeps IRC mounted across tab switches so SSE messages persist.
+- Uses Match Control for roll/order/score flow and event log.
+- Uses the left player column for score, home mod selection, inventory, lobby actions, and result posting.
+- Manual pick/ban order defaults on, allowing free pick/ban/protect action selection; turning it off enforces the persisted match flow.
+- Test mode runs the same local flow loop without writing Sheets or sending IRC relay messages.
 
 ## Repo Layout
 

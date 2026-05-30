@@ -96,7 +96,7 @@ function normalizeInventory(raw: unknown): Inventory | null {
   }
 }
 
-function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null, manualMapActions: boolean): string {
+function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null): string {
   if (!state) return "Load match flow state."
   const currentMap = state.currentSlot
     ? mappool?.find((map) => map.slot === state.currentSlot)
@@ -111,9 +111,9 @@ function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null,
     case "home_mod":
       return `${state.turnPlayer ?? "Next player"} chooses home mod in the left player column.`
     case "ban":
-      return manualMapActions ? "Any player can pick, ban, or protect an available map." : `${state.turnPlayer ?? "Next player"} bans an available map.`
+      return `${state.turnPlayer ?? "Next player"} bans an available map.`
     case "craft":
-      return manualMapActions ? "Craft if needed, then use a free map action." : `${state.turnPlayer ?? "Next player"} may craft in Recipes, then picks an available map.`
+      return `${state.turnPlayer ?? "Next player"} may craft in Recipes, then picks an available map.`
     case "play":
       return currentMap
         ? `Play ${currentMap.slot}; record scores in Match Control after both finish.`
@@ -779,7 +779,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 playerBOsuId={match.playerBOsuId}
                 isDemo={isDemo}
                 isTestMode={testMode}
-                nextActionHint={nextActionHint(flowState, liveMappool, manualMapActions)}
+                nextActionHint={nextActionHint(flowState, liveMappool)}
                 simulatedMessages={simulatedIrcMessages}
                 onMessagesChange={(msgs) => { ircMessagesRef.current = msgs }}
                 onNewMessage={handleNewIrcMessage}
