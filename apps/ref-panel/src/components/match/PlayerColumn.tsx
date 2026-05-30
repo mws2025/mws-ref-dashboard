@@ -4,6 +4,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { INGREDIENTS } from "@/data/constants"
 import type { IngKey, Inventory, MatchStatus } from "@/types"
@@ -14,7 +15,7 @@ function WinBoxes({ score, needed }: { score: number; needed: number }) {
       {Array.from({ length: needed }).map((_, i) => (
         <div
           key={i}
-          className={`h-3 w-3 rounded-sm border ${i < score ? "border-primary bg-primary" : "border-border bg-transparent"}`}
+          className={`h-4 w-4 rounded-sm border ${i < score ? "border-primary bg-primary" : "border-border bg-transparent"}`}
         />
       ))}
     </div>
@@ -23,8 +24,8 @@ function WinBoxes({ score, needed }: { score: number; needed: number }) {
 
 function IngredientBar({ inv, editing, onChange, onToggleEdit }: { inv: Inventory; editing?: boolean; onChange?: (key: IngKey, delta: number) => void; onToggleEdit?: () => void }) {
   return (
-    <div className="mt-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2">
-      <div className="mb-1.5 flex items-center justify-between">
+    <div className="mt-2 rounded-md border border-border/60 bg-muted/30 px-2 py-2">
+      <div className="mb-2 flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Ingredients</span>
         <button
           className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -33,25 +34,33 @@ function IngredientBar({ inv, editing, onChange, onToggleEdit }: { inv: Inventor
           {editing ? <><Check className="h-2.5 w-2.5" /> Done</> : <><Pencil className="h-2.5 w-2.5" /> Edit</>}
         </button>
       </div>
-      <div className="flex flex-wrap gap-x-2 gap-y-1">
-        {INGREDIENTS.map(({ key, name, hex }) => (
-          <div key={key} className="flex items-center gap-0.5">
-            <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: hex }} />
-            <span className="text-xs text-muted-foreground">{name}</span>
+      <div className="grid grid-cols-5 gap-1">
+        {INGREDIENTS.map(({ key, name, hex, icon }) => (
+          <div key={key} className="flex flex-col items-center gap-0.5">
+            <img
+              src={`/assets/Ingredients/${icon}.png`}
+              alt={name}
+              className="h-6 w-6 object-contain select-none"
+              draggable={false}
+            />
             {editing ? (
-              <div className="ml-0.5 flex items-center gap-0.5">
+              <div className="flex w-full flex-col items-center">
                 <button
-                  className="flex h-4 w-4 items-center justify-center rounded text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => onChange?.(key, -1)}
-                >−</button>
-                <span className="w-4 text-center text-xs font-semibold tabular-nums" style={{ color: hex }}>{inv[key] ?? 0}</span>
-                <button
-                  className="flex h-4 w-4 items-center justify-center rounded text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="flex h-4 w-full items-center justify-center rounded text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => onChange?.(key, +1)}
                 >+</button>
+                <span className="font-mono text-xs font-bold tabular-nums leading-none" style={{ color: hex }}>
+                  {inv[key] ?? 0}
+                </span>
+                <button
+                  className="flex h-4 w-full items-center justify-center rounded text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => onChange?.(key, -1)}
+                >-</button>
               </div>
             ) : (
-              <span className="ml-0.5 text-xs font-semibold tabular-nums" style={{ color: hex }}>×{inv[key] ?? 0}</span>
+              <span className="font-mono text-[10px] font-semibold tabular-nums" style={{ color: hex }}>
+                x{inv[key] ?? 0}
+              </span>
             )}
           </div>
         ))}
@@ -85,6 +94,7 @@ interface Props {
   matchStatus?: MatchStatus
   hasLobby?: boolean
   isDemo?: boolean
+  testResultUnlocked?: boolean
 }
 
 const LOBBY_CONFIRM_CONFIG: Record<LobbyConfirm, { title: string; description: string; actionLabel: string; destructive?: boolean }> = {
@@ -100,7 +110,7 @@ export function PlayerColumn({
   round, refName, streamer,
   onInvAChange, onInvBChange,
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit,
-  matchStatus, hasLobby = false, isDemo = false,
+  matchStatus, hasLobby = false, isDemo = false, testResultUnlocked = false,
 }: Props) {
   const winsNeeded = Math.ceil(bestOf / 2)
   const isFinished = matchStatus === "completed" || matchStatus === "forfeit"
@@ -161,34 +171,47 @@ export function PlayerColumn({
 
         {/* Match meta */}
         <div className="space-y-1.5 p-4 text-xs text-muted-foreground">
-          <p><span className="font-medium text-foreground">Format</span> Bo{bestOf}</p>
-          <p><span className="font-medium text-foreground">Round</span> {round}</p>
-          <p><span className="font-medium text-foreground">Ref</span> {refName}</p>
-          {streamer && <p><span className="font-medium text-foreground">Streamer</span> {streamer}</p>}
+          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Format</span> <span className="ml-1">Bo{bestOf}</span></p>
+          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Round</span> <span className="ml-1">{round}</span></p>
+          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Ref</span> <span className="ml-1">{refName}</span></p>
+          {streamer && <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Streamer</span> <span className="ml-1">{streamer}</span></p>}
         </div>
 
         {/* Pool legend */}
         <div className="border-t border-border p-4">
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-muted-foreground">Ingredient key</p>
-          {INGREDIENTS.map(({ name, pool, hex }) => (
-            <div key={name} className="flex items-center gap-2 py-0.5">
-              <span className="inline-block h-2 w-2 flex-shrink-0 rounded-sm" style={{ backgroundColor: hex }} />
-              <span className="text-xs text-muted-foreground">{name} = {pool} win</span>
-            </div>
-          ))}
+          <p className="mb-2 text-[10px] uppercase tracking-[0.16em] text-muted-foreground">Ingredient key</p>
+          <div className="space-y-0.5">
+            {INGREDIENTS.map(({ name, pool, icon }) => (
+              <div key={name} className="flex items-center gap-2 py-0.5">
+                <img
+                  src={`/assets/Ingredients/${icon}.png`}
+                  alt={name}
+                  className="h-4 w-4 flex-shrink-0 object-contain select-none"
+                  draggable={false}
+                />
+                <span className="flex-1 text-xs text-muted-foreground">{name}</span>
+                <span className="font-mono text-[10px] text-muted-foreground/50">{pool}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Lobby manage — pinned to bottom */}
+      {/* Lobby manage - pinned to bottom */}
       <div className="flex-shrink-0 space-y-1.5 border-t border-border p-4">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Lobby</p>
-          {isDemo && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">demo — actions locked</span>}
+          <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Lobby</p>
+          {isDemo && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">demo</span>}
         </div>
+        {/* Setup */}
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || hasLobby} onClick={() => setConfirmAction("create")}>Create lobby</Button>
-        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || hasLobby} onClick={() => setJoinOpen(true)}>Join existing lobby</Button>
+        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || hasLobby} onClick={() => setJoinOpen(true)}>Join existing</Button>
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || hasLobby} onClick={() => setConfirmAction("reminder")}>Match reminder</Button>
-        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || !isFinished} onClick={() => setConfirmAction("result")}>Post match result</Button>
+        <Separator className="my-1" />
+        {/* Result */}
+        <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo || (!isFinished && !testResultUnlocked)} onClick={() => setConfirmAction("result")}>Post match result</Button>
+        <Separator className="my-1" />
+        {/* Danger */}
         <Button size="sm" variant="outline" className="w-full text-xs border-destructive/40 text-destructive/80 hover:border-destructive hover:text-destructive hover:bg-destructive/5" disabled={isDemo || isFinished} onClick={() => setForfeitOpen(true)}>Set forfeit</Button>
         <Button size="sm" variant="destructive" className="w-full text-xs" disabled={isDemo || !hasLobby} onClick={() => setConfirmAction("close")}>Close lobby</Button>
       </div>
@@ -237,7 +260,7 @@ export function PlayerColumn({
       <Dialog open={forfeitOpen} onOpenChange={setForfeitOpen}>
         <DialogContent showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Set forfeit — who wins?</DialogTitle>
+            <DialogTitle>Set forfeit - who wins?</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">The other player will receive a score of −1. Match status will be set to forfeit.</p>
           <div className="flex gap-2 pt-1">

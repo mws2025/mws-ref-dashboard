@@ -5,7 +5,7 @@ const ERROR_META: Record<number, { title: string; desc: string }> = {
   401: { title: "Unauthorized",          desc: "You need to log in to access this page." },
   403: { title: "Forbidden",             desc: "You don't have permission to access this." },
   404: { title: "Not Found",             desc: "The page you're looking for doesn't exist." },
-  429: { title: "Too Many Requests",     desc: "Slow down — you've been rate limited." },
+  429: { title: "Too Many Requests",     desc: "Slow down - you've been rate limited." },
   500: { title: "Server Error",          desc: "Something went wrong on our end." },
   502: { title: "Bad Gateway",           desc: "The server received an invalid response upstream." },
   503: { title: "Service Unavailable",   desc: "The server is temporarily down. Try again soon." },

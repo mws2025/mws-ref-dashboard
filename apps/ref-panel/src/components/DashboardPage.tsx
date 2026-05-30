@@ -1,15 +1,26 @@
 import { useEffect, useState } from "react"
+import { CalendarDays, Radio, CalendarOff, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
 import type { Match } from "@/types"
+import { LiveBadge } from "./LiveBadge"
 
 function splitTournamentName(full: string): [string, string] {
-  const idx = full.indexOf(" — ")
+  const idx = full.indexOf(" - ")
   if (idx !== -1) return [full.slice(0, idx), full.slice(idx + 3)]
   return [full, ""]
 }
@@ -25,8 +36,18 @@ interface Props {
   currentUserName: string
   tournamentName?: string
   abbreviation?: string
+  testMode?: boolean
   onOpenMatch: (m: Match) => void
   onLogout: () => void
+}
+
+function formatMatchDate(raw: string): string {
+  if (!raw) return raw
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? new Date(`${raw}T12:00:00`) : new Date(raw)
+  if (isNaN(d.getTime())) return raw
+  const weekday = d.toLocaleDateString("en-US", { weekday: "short" })
+  const month = d.toLocaleDateString("en-US", { month: "short" })
+  return `(${weekday}) ${month} ${d.getDate()}`
 }
 
 function canOpenMatch(match: Match, currentUserName: string): boolean {
@@ -35,9 +56,11 @@ function canOpenMatch(match: Match, currentUserName: string): boolean {
   return match.status === "live" || (assignedReferee === currentReferee && !isTerminalMatchStatus(match.status))
 }
 
-function EmptyState({ message }: { message: string }) {
+
+function EmptyState({ icon: Icon, message }: { icon: React.ElementType; message: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-border bg-card/30 px-4 py-6 text-sm text-muted-foreground">
+    <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-card/30 px-4 py-5 text-sm text-muted-foreground">
+      <Icon className="h-4 w-4 shrink-0 opacity-60" />
       {message}
     </div>
   )
@@ -65,24 +88,23 @@ function SkeletonTableRows() {
   return (
     <>
       {Array.from({ length: 5 }).map((_, i) => (
-        <tr key={i} className="border-b border-border/60">
-          <td className="px-4 py-3"><Skeleton className="h-3 w-20" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-3 w-12" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-3 w-36" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-3 w-16" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-3 w-12" /></td>
-          <td className="px-4 py-3"><Skeleton className="h-4 w-14 rounded-full" /></td>
-          <td className="px-4 py-3" />
-        </tr>
+        <TableRow key={i}>
+          <TableCell><Skeleton className="h-3 w-20" /></TableCell>
+          <TableCell><Skeleton className="h-3 w-16" /></TableCell>
+          <TableCell><Skeleton className="h-3 w-36" /></TableCell>
+          <TableCell><Skeleton className="h-3 w-16" /></TableCell>
+          <TableCell><Skeleton className="h-3 w-12" /></TableCell>
+          <TableCell><Skeleton className="h-4 w-14 rounded-full" /></TableCell>
+          <TableCell />
+        </TableRow>
       ))}
     </>
   )
 }
 
-export function DashboardPage({ currentUserName, tournamentName, abbreviation, onOpenMatch, onLogout }: Props) {
-  const fullName = tournamentName || `${TOURNAMENT_NAME} — ${TOURNAMENT_SUBTITLE}`
+export function DashboardPage({ currentUserName, tournamentName, testMode, onOpenMatch, onLogout }: Props) {
+  const fullName = tournamentName || `${TOURNAMENT_NAME} - ${TOURNAMENT_SUBTITLE}`
   const [nameA, nameB] = splitTournamentName(fullName)
-  const abbr = abbreviation || ""
   const [matchesResponse, setMatchesResponse] = useState<MatchesResponse | null>(null)
   const [matchesError, setMatchesError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
@@ -124,14 +146,20 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
 
   return (
     <div className="min-h-svh bg-background text-foreground">
+      {testMode && (
+        <div className="flex items-center gap-2 bg-amber-100 px-4 py-2 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+          <span className="font-semibold">TEST MODE</span>
+          <span className="text-amber-700 dark:text-amber-400">All actions are simulated - no real IRC messages or sheet writes will occur.</span>
+        </div>
+      )}
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-4 border-b border-border pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex items-center gap-4">
             <img src="/assets/logo_light.png" alt="Whisked 2026" className="h-14 w-auto object-contain" />
             <div className="space-y-0.5">
-              <p className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground">{abbr || nameA}</p>
-              <h1 className="font-heading text-2xl leading-tight">{nameB || nameA} · Referee Dashboard</h1>
-              <p className="text-sm text-muted-foreground">Welcome back, {currentUserName}.</p>
+              <p className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground">Referee Dashboard</p>
+              <h1 className="font-heading text-2xl leading-tight">{nameB || nameA}</h1>
+              <p className="text-sm text-muted-foreground">Welcome back, {currentUserName}!</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -143,6 +171,7 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
           <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
             <span>{matchesError}</span>
             <Button size="sm" variant="outline" onClick={() => setReloadKey((key) => key + 1)}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
               Retry
             </Button>
           </div>
@@ -153,14 +182,17 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
           {!matchesResponse ? <SkeletonCards /> : yourMatches.length > 0 ? (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {yourMatches.map((m) => (
-                <Card key={m.id} className="border-primary/30">
+                <Card key={m.id} className="border-border/60">
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="font-heading text-lg font-semibold">{m.playerA} vs {m.playerB}</p>
-                        <p className="text-sm text-muted-foreground">{m.round} · {m.date} · {m.time}</p>
+                        <p className="font-heading text-lg font-semibold">{m.playerA} <span className="font-sans normal-case text-muted-foreground">vs</span> {m.playerB}</p>
+                        <p className="text-sm text-muted-foreground">{m.round} · {formatMatchDate(m.date)} · {m.time}</p>
                       </div>
-                      <Badge variant={statusVariant(m.status)} className="capitalize">{m.status}</Badge>
+                      {m.status === "live"
+                        ? <LiveBadge />
+                        : <Badge variant={statusVariant(m.status)} className="capitalize">{m.status}</Badge>
+                      }
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -172,7 +204,7 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
               ))}
             </div>
           ) : (
-            <EmptyState message="No matches assigned to you." />
+            <EmptyState icon={CalendarDays} message="No matches assigned to you." />
           )}
         </section>
 
@@ -181,14 +213,14 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
           {!matchesResponse ? <SkeletonCards /> : activeMatches.length > 0 ? (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {activeMatches.map((m) => (
-                <Card key={m.id} className="border-primary/40">
+                <Card key={m.id} className="border-primary/50 shadow-sm">
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className="font-heading text-lg font-semibold">{m.playerA} vs {m.playerB}</p>
-                        <p className="text-sm text-muted-foreground">{m.round} · {m.date} · {m.time}</p>
+                        <p className="font-heading text-lg font-semibold">{m.playerA} <span className="font-sans normal-case text-muted-foreground">vs</span> {m.playerB}</p>
+                        <p className="text-sm text-muted-foreground">{m.round} · {formatMatchDate(m.date)} · {m.time}</p>
                       </div>
-                      <Badge variant={statusVariant(m.status)}>Live</Badge>
+                      <LiveBadge />
                     </div>
                   </CardHeader>
                   <CardContent>
@@ -200,7 +232,7 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
               ))}
             </div>
           ) : (
-            <EmptyState message="No active matches right now." />
+            <EmptyState icon={Radio} message="No active matches right now." />
           )}
         </section>
 
@@ -209,40 +241,56 @@ export function DashboardPage({ currentUserName, tournamentName, abbreviation, o
         <section className="space-y-3">
           <h2 className="font-heading text-xl">Tournament schedule</h2>
           <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-card/60">
-                  {["Round", "Mappool", "Match", "Date", "Time", "Status", ""].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {!matchesResponse ? <SkeletonTableRows /> : scheduleMatches.length > 0 ? (
-                  scheduleMatches.map((m, i) => (
-                    <tr key={m.id} className={`border-b border-border/60 last:border-0 ${i % 2 === 0 ? "bg-background/40" : ""}`}>
-                      <td className="px-4 py-3 text-muted-foreground">{m.round}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{m.mappool ?? "—"}</td>
-                      <td className="px-4 py-3 font-medium">{m.playerA} <span className="text-muted-foreground">vs</span> {m.playerB}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{m.date}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{m.time}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={statusVariant(m.status)} className="text-xs capitalize">{m.status}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {canOpenMatch(m, currentUserName) && (
-                          <Button size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td className="px-4 py-6 text-center text-muted-foreground" colSpan={7}>No scheduled matches found.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            <ScrollArea className="w-full">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-card/60 hover:bg-card/60">
+                    {["Round", "Match ID", "Match", "Date", "Time", "Status", "Action"].map((h) => (
+                      <TableHead key={h} className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground whitespace-nowrap">
+                        {h}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {!matchesResponse ? (
+                    <SkeletonTableRows />
+                  ) : scheduleMatches.length > 0 ? (
+                    scheduleMatches.map((m) => (
+                      <TableRow key={m.id}>
+                        <TableCell className="text-muted-foreground">{m.round}</TableCell>
+                        <TableCell className="font-mono text-xs">{m.id}</TableCell>
+                        <TableCell className="font-medium whitespace-nowrap">
+                          {m.playerA} <span className="text-muted-foreground">vs</span> {m.playerB}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">{formatMatchDate(m.date)}</TableCell>
+                        <TableCell className="text-muted-foreground">{m.time}</TableCell>
+                        <TableCell>
+                          {m.status === "live"
+                            ? <LiveBadge />
+                            : <Badge variant={statusVariant(m.status)} className="text-xs capitalize">{m.status}</Badge>
+                          }
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {canOpenMatch(m, currentUserName) && (
+                            <Button size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={7}>
+                        <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                          <CalendarOff className="h-4 w-4 opacity-60" />
+                          No scheduled matches found.
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </ScrollArea>
           </div>
         </section>
 

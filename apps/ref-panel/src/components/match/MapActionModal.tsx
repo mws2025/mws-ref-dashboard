@@ -27,7 +27,7 @@ export function MapActionModal({ map, playerA, playerB, onClose, onAction }: Pro
                 <span style={{ color: POOL_CONFIG[map.pool].hex === "#ffffff" ? "var(--muted-foreground)" : POOL_CONFIG[map.pool].hex }}>
                   {map.slot}
                 </span>
-                {" — "}
+                {" - "}
                 <span className="text-foreground">{map.map}</span>
               </Dialog.Title>
 

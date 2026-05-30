@@ -705,6 +705,10 @@ function isRestrictAccess(configMap: Map<string, string>): boolean {
   return configMap.get("restrict access")?.toLowerCase() !== "false"
 }
 
+function isTestMode(configMap: Map<string, string>): boolean {
+  return configMap.get("test mode")?.toLowerCase() === "true"
+}
+
 function teamModeToInt(mode: string): number {
   switch (mode.trim().toLowerCase().replace(/[^a-z]/g, "")) {
     case "tagcoop": return 1
@@ -1141,6 +1145,87 @@ app.get("/api/match/:matchId/inventory", async (c) => {
   }
 })
 
+app.put("/api/match/:matchId/inventory", async (c) => {
+  const matchId = c.req.param("matchId")
+  const INGREDIENT_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
+
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const player = typeof body.player === "string" ? body.player.trim() : ""
+  if (!player) return c.json({ error: "player required" }, 400)
+
+  // #TEST-MODE-START
+  const configMap = await getConfigMap(c.env)
+  if (isTestMode(configMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
+
+  try {
+    const sheetId = mustEnv(c.env, "GOOGLE_SHEETS_TOURNAMENT_ID")
+    const inventoryValues = await getSheetValuesSafe(c.env, "inventory!A1:Z")
+    const [rawHeaders, ...rows] = inventoryValues
+    if (!rawHeaders) return c.json({ error: "Inventory sheet empty" }, 500)
+
+    const headers = rawHeaders.map(normalizeHeader)
+    const matchIdIdx = headers.indexOf("match_id")
+    const playerIdx = headers.indexOf("player")
+    if (matchIdIdx < 0 || playerIdx < 0) {
+      return c.json({ error: "Inventory sheet missing required columns" }, 500)
+    }
+
+    const ingValues = INGREDIENT_KEYS.map((k) => String(Math.max(0, Number(body[k]) || 0)))
+    const ingAfter = Object.fromEntries(INGREDIENT_KEYS.map((k, i) => [k, ingValues[i]]))
+
+    const rowIdx = rows.findIndex(
+      (r) => r[matchIdIdx]?.trim() === matchId && r[playerIdx]?.trim().toLowerCase() === player.toLowerCase()
+    )
+
+    if (rowIdx >= 0) {
+      const sheetRowNum = rowIdx + 2
+      const data: { range: string; values: string[][] }[] = []
+      INGREDIENT_KEYS.forEach((k, i) => {
+        const colIdx = headers.indexOf(k)
+        if (colIdx >= 0) data.push({ range: `inventory!${colLetter(colIdx)}${sheetRowNum}`, values: [[ingValues[i]]] })
+      })
+      if (data.length > 0) {
+        const accessToken = await getGoogleAccessToken(c.env)
+        const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ valueInputOption: "RAW", data }),
+        })
+        if (!res.ok) {
+          const reason = await res.text()
+          throw new Error(`Sheets batch write failed: ${res.status} ${reason}`)
+        }
+      }
+    } else {
+      const newRow = rawHeaders.map((_, i) => {
+        const h = headers[i]
+        if (h === "match_id") return matchId
+        if (h === "player") return player
+        const ing = INGREDIENT_KEYS.find((k) => k === h)
+        if (ing) return String(Math.max(0, Number(body[ing]) || 0))
+        return ""
+      })
+      await appendSheetRow(c.env, "inventory", newRow)
+    }
+
+    await appendAuditLog(c.env, "ref", "inventory_update", "inventory", `${matchId}:${player}`, "{}", JSON.stringify(ingAfter))
+
+    return c.json({ ok: true })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to update inventory" }, 500)
+  }
+})
+
 app.get("/api/health", (c) => {
   return c.json({
     ok: true,
@@ -1170,6 +1255,7 @@ app.get("/api/public/config", async (c) => {
     const configMap = await getConfigMap(c.env)
     return c.json({
       restrictAccess:  isRestrictAccess(configMap),
+      testMode:        isTestMode(configMap),
       tournamentName:  configMap.get("tournament name") ?? "",
       abbreviation:    configMap.get("abbreviation") ?? "",
       scoring:         configMap.get("scoring") ?? "",
@@ -1220,6 +1306,13 @@ app.post("/api/irc/send", async (c) => {
   if (!channel || !message) {
     return c.json({ error: "channel and message required" }, 400)
   }
+
+  // #TEST-MODE-START
+  const ircCfgMap = await getConfigMap(c.env)
+  if (isTestMode(ircCfgMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
 
   const res = await fetch(`${relayUrl}/send`, {
     method: "POST",
@@ -1292,6 +1385,18 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
   const staffWebhook = configMap.get("staff webhook")?.trim()
 
   const title = `${abbreviation}: ${playerA} vs ${playerB}`
+
+  // #TEST-MODE-START
+  if (isTestMode(configMap)) {
+    const fakeId = "9" + (Math.floor(Math.random() * 9000000) + 1000000).toString()
+    const fakeLobbyUrl = `https://osu.ppy.sh/mp/${fakeId}`
+    const fakeChannel = `#mp_${fakeId}`
+    const fakeFollowUpCmds: string[] = [`!mp set ${teamMode} ${scoringMode} ${lobbySize}`]
+    if (enforceNF) fakeFollowUpCmds.push("!mp mods NF")
+    if (refUsername) fakeFollowUpCmds.push(`!mp addref ${refUsername}`)
+    return c.json({ ok: true, lobbyUrl: fakeLobbyUrl, channel: fakeChannel, mpId: fakeId, followUpCmds: fakeFollowUpCmds })
+  }
+  // #TEST-MODE-END
 
   // Open SSE stream BEFORE sending !mp make to avoid race with BanchoBot response
   const streamRes = await fetch(`${relayUrl}/stream`, {
@@ -1389,6 +1494,13 @@ app.post("/api/match/:matchId/close-lobby", async (c) => {
 
   const { channel, messages = [] } = body
 
+  // #TEST-MODE-START
+  const closeCfgMap = await getConfigMap(c.env)
+  if (isTestMode(closeCfgMap)) {
+    return c.json({ ok: true, messageCount: messages.length })
+  }
+  // #TEST-MODE-END
+
   // Send !mp close via relay (best-effort — lobby may already be closed)
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
@@ -1440,6 +1552,13 @@ app.post("/api/match/:matchId/remind", async (c) => {
   ])
 
   const reminderWebhook = configMap.get("reminder webhook")?.trim()
+
+  // #TEST-MODE-START
+  if (isTestMode(configMap)) {
+    return c.json({ ok: true, simulated: true })
+  }
+  // #TEST-MODE-END
+
   if (!reminderWebhook) {
     return c.json({ error: "Reminder webhook not configured in config sheet" }, 503)
   }
@@ -1516,6 +1635,13 @@ app.post("/api/match/:matchId/join-lobby", async (c) => {
   const channel = `#mp_${mpId}`
   const lobbyUrl = `https://osu.ppy.sh/mp/${mpId}`
 
+  // #TEST-MODE-START
+  const joinCfgMap = await getConfigMap(c.env)
+  if (isTestMode(joinCfgMap)) {
+    return c.json({ ok: true, alive: true, simulated: true, lobbyUrl, channel })
+  }
+  // #TEST-MODE-END
+
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
 
@@ -1584,6 +1710,13 @@ app.post("/api/match/:matchId/action", async (c) => {
   }
 
   const status = action === "pick" ? "picked" : action === "ban" ? "banned" : "protected"
+
+  // #TEST-MODE-START
+  const actionCfgMap = await getConfigMap(c.env)
+  if (isTestMode(actionCfgMap)) {
+    return c.json({ ok: true, slot, action, player, status, simulated: true })
+  }
+  // #TEST-MODE-END
 
   try {
     const matchMapsValues = await getSheetValues(c.env, "match_maps!A1:Z")
@@ -1664,6 +1797,13 @@ app.post("/api/match/:matchId/forfeit", async (c) => {
     score_a: loserIsA ? "-1" : "0",
     score_b: loserIsA ? "0" : "-1",
   }
+
+  // #TEST-MODE-START
+  const forfeitCfgMap = await getConfigMap(c.env)
+  if (isTestMode(forfeitCfgMap)) {
+    return c.json({ ok: true, winner, loser: loserIsA ? playerA : playerB, simulated: true })
+  }
+  // #TEST-MODE-END
 
   try {
     await updateMatchFields(c.env, matchId, fields)

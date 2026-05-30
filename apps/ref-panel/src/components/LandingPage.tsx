@@ -8,14 +8,14 @@ interface Props {
 }
 
 export function LandingPage({ onLogin, restrictAccess = true, tournamentName }: Props) {
-  const displayName = tournamentName || `${TOURNAMENT_NAME} — Whisked 2026`
+  const displayName = tournamentName || `${TOURNAMENT_NAME} - Whisked 2026`
   return (
     <div className="flex min-h-svh flex-col items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm space-y-8 text-center">
         <div className="space-y-3">
           <img
             src="/assets/logo_light.png"
-            alt="Whisked 2026 — ビートに合わせて焼く"
+            alt="Whisked 2026 - ビートに合わせて焼く"
             className="mx-auto h-28 w-auto object-contain"
           />
           <p className="font-heading text-sm tracking-[0.22em] text-muted-foreground uppercase">

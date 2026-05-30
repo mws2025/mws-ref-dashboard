@@ -11,9 +11,10 @@ function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
       {(Object.entries(cost) as [IngKey, number][]).map(([k, n]) => {
         const ing = INGREDIENTS.find((i) => i.key === k)!
         return (
-          <span key={k} className="flex items-center gap-0.5 text-xs text-muted-foreground">
-            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: ing.hex }} />
-            {ing.name}×{n}
+          <span key={k} className="flex items-center gap-1 text-xs text-muted-foreground">
+            <img src={`/assets/Ingredients/${ing.icon}.png`} alt={ing.name} className="h-3 w-3 object-contain select-none" draggable={false} />
+            <span style={{ color: ing.hex }}>{ing.name}</span>
+            <span className="font-mono tabular-nums">x{n}</span>
           </span>
         )
       })}
@@ -23,12 +24,12 @@ function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
 
 function IngredientBar({ inv }: { inv: Inventory }) {
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
-      {INGREDIENTS.map(({ key, name, hex }) => (
-        <div key={key} className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
-          <span className="text-xs text-muted-foreground">{name}</span>
-          <span className="text-xs font-semibold tabular-nums" style={{ color: hex }}>×{inv[key]}</span>
+    <div className="grid grid-cols-5 gap-2 pt-1">
+      {INGREDIENTS.map(({ key, name, hex, icon }) => (
+        <div key={key} className="flex flex-col items-center gap-0.5">
+          <img src={`/assets/Ingredients/${icon}.png`} alt={name} className="h-5 w-5 object-contain select-none" draggable={false} />
+          <span className="text-[10px] text-muted-foreground">{name}</span>
+          <span className="font-mono text-[10px] font-semibold tabular-nums" style={{ color: hex }}>x{inv[key]}</span>
         </div>
       ))}
     </div>

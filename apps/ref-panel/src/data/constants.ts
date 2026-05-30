@@ -15,10 +15,10 @@ export const POOL_CONFIG: Record<Pool, { hex: string; ing: IngKey | null; label:
   TB: { hex: "#ffffff", ing: null,     label: "TB" },
 }
 
-export const INGREDIENTS: { key: IngKey; name: string; pool: string; hex: string }[] = [
-  { key: "egg",    name: "Egg",    pool: "NM", hex: "#957259" },
-  { key: "sugar",  name: "Sugar",  pool: "HD", hex: "#b89600" },
-  { key: "butter", name: "Butter", pool: "HR", hex: "#8d3f38" },
-  { key: "flour",  name: "Flour",  pool: "DT", hex: "#4e6a7a" },
-  { key: "milk",   name: "Milk",   pool: "FM", hex: "#5f7f63" },
+export const INGREDIENTS: { key: IngKey; name: string; pool: string; hex: string; icon: string }[] = [
+  { key: "egg",    name: "Egg",    pool: "NM", hex: "#957259", icon: "eggs"   },
+  { key: "sugar",  name: "Sugar",  pool: "HD", hex: "#b89600", icon: "sugar"  },
+  { key: "butter", name: "Butter", pool: "HR", hex: "#8d3f38", icon: "butter" },
+  { key: "flour",  name: "Flour",  pool: "DT", hex: "#4e6a7a", icon: "flour"  },
+  { key: "milk",   name: "Milk",   pool: "FM", hex: "#5f7f63", icon: "milk"   },
 ]

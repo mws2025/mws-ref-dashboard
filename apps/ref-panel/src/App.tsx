@@ -23,12 +23,12 @@ function getApiUrl(path: string): string {
   return `${origin}${path}`
 }
 
-function MatchPanelRoute({ onBack, isDemo }: { onBack: () => void; isDemo: boolean }) {
+function MatchPanelRoute({ onBack, isDemo, testMode }: { onBack: () => void; isDemo: boolean; testMode: boolean }) {
   const { state } = useLocation()
   const match = (state as { match?: Match } | null)?.match
 
   if (!match) return <Navigate to="/dashboard" replace />
-  return <MatchPanel match={match} onBack={onBack} isDemo={isDemo} />
+  return <MatchPanel match={match} onBack={onBack} isDemo={isDemo} testMode={testMode} />
 }
 
 function ErrorRoute() {
@@ -42,6 +42,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>("loading")
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
   const [restrictAccess, setRestrictAccess] = useState<boolean>(true)
+  const [testMode, setTestMode] = useState(false)
   const [tournamentName, setTournamentName] = useState("")
   const [abbreviation, setAbbreviation] = useState("")
 
@@ -53,8 +54,9 @@ function App() {
       ])
 
       if (configRes.ok) {
-        const cfg = await configRes.json() as { restrictAccess?: boolean; tournamentName?: string; abbreviation?: string }
+        const cfg = await configRes.json() as { restrictAccess?: boolean; testMode?: boolean; tournamentName?: string; abbreviation?: string }
         setRestrictAccess(cfg.restrictAccess ?? true)
+        if (typeof cfg.testMode === "boolean") setTestMode(cfg.testMode)
         if (cfg.tournamentName) setTournamentName(cfg.tournamentName)
         if (cfg.abbreviation)   setAbbreviation(cfg.abbreviation)
       }
@@ -123,11 +125,12 @@ function App() {
           currentUserName={sessionUser?.username ?? "Referee"}
           tournamentName={tournamentName}
           abbreviation={abbreviation}
+          testMode={testMode}
           onOpenMatch={(m) => navigate(`/match/${m.id}`, { state: { match: m } })}
           onLogout={() => { void logout() }}
         />
       } />
-      <Route path="/match/:matchId" element={<MatchPanelRoute onBack={() => navigate("/dashboard")} isDemo={sessionUser?.osu_id === 0} />} />
+      <Route path="/match/:matchId" element={<MatchPanelRoute onBack={() => navigate("/dashboard")} isDemo={sessionUser?.osu_id === 0} testMode={testMode} />} />
       <Route path="/error/:code" element={<ErrorRoute />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

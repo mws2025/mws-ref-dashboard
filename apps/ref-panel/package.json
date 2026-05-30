@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20260521.1",
+    "@fontsource-variable/lexend": "^5.2.11",
     "@fontsource/give-you-glory": "^5.2.8",
     "@fontsource/josefin-sans": "^5.2.8",
     "@fontsource/mulish": "^5.2.8",

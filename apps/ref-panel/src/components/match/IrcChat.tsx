@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { IRC_BOT } from "@/data/mock"
 
@@ -9,6 +9,10 @@ export interface LiveMsg {
   local?: boolean
 }
 
+export interface IrcChatHandle {
+  send: (msg: string) => void
+}
+
 interface Props {
   channel?: string
   refName: string
@@ -17,19 +21,33 @@ interface Props {
   playerAOsuId?: string
   playerBOsuId?: string
   isDemo?: boolean
+  isTestMode?: boolean
+  simulatedMessages?: LiveMsg[]
   onMessagesChange?: (msgs: LiveMsg[]) => void
   onNewMessage?: (msg: LiveMsg) => void
 }
 
-export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, onMessagesChange, onNewMessage }: Props) {
+export const IrcChat = forwardRef<IrcChatHandle, Props>(function IrcChat(
+  { channel, refName, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, isTestMode = false, simulatedMessages, onMessagesChange, onNewMessage },
+  ref
+) {
   const [messages, setMessages] = useState<LiveMsg[]>([])
   const [draft, setDraft] = useState("")
   const [sending, setSending] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [timerEndsAt, setTimerEndsAt] = useState<number | null>(null)
+  const [timerTotal, setTimerTotal] = useState(0)
+  const [timerRemaining, setTimerRemaining] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!channel) return
+    // #TEST-MODE-START
+    if (isTestMode) {
+      setConnected(true)
+      return () => setConnected(false)
+    }
+    // #TEST-MODE-END
     const url = `/api/irc/stream?channel=${encodeURIComponent(channel)}`
     const es = new EventSource(url, { withCredentials: true })
     es.onopen = () => setConnected(true)
@@ -45,17 +63,28 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
       es.close()
       setConnected(false)
     }
-  }, [channel])
+  }, [channel, isTestMode])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     onMessagesChange?.(messages)
   }, [messages, onMessagesChange])
 
-  const isMp = draft.trimStart().startsWith("!mp")
-  const previewCmd = isMp ? `${draft.trimEnd()} ········` : draft
+  // Timer tick
+  useEffect(() => {
+    if (!timerEndsAt) return
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((timerEndsAt - Date.now()) / 1000))
+      setTimerRemaining(remaining)
+      if (remaining === 0) {
+        setTimerEndsAt(null)
+        clearInterval(interval)
+      }
+    }, 500)
+    return () => clearInterval(interval)
+  }, [timerEndsAt])
 
-  async function send(override?: string) {
+async function send(override?: string) {
     const msg = override ?? draft.trim()
     if (!msg || !channel || sending) return
     setSending(true)
@@ -71,10 +100,24 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
         { ts: new Date().toISOString(), from: IRC_BOT, message: `<${refName}>: ${msg}`, local: true },
       ])
       if (!override) setDraft("")
+
+      // Timer detection
+      const timerMatch = msg.match(/^!mp\s+timer\s+(\d+)/i)
+      if (timerMatch) {
+        const secs = parseInt(timerMatch[1], 10)
+        setTimerTotal(secs)
+        setTimerEndsAt(Date.now() + secs * 1000)
+        setTimerRemaining(secs)
+      }
+      if (/^!mp\s+aborttimer/i.test(msg) || /^!mp\s+start/i.test(msg)) {
+        setTimerEndsAt(null)
+      }
     } finally {
       setSending(false)
     }
   }
+
+  useImperativeHandle(ref, () => ({ send: (msg: string) => { void send(msg) } }))
 
   function fmtTime(ts: string): string {
     try {
@@ -84,26 +127,43 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
     }
   }
 
+  function fmtCountdown(secs: number): string {
+    const m = Math.floor(secs / 60)
+    const s = secs % 60
+    return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${s}s`
+  }
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       {/* Status bar */}
       <div className="flex-shrink-0 flex items-center gap-2 border-b border-border px-3 py-1.5">
         <span
-          className={`h-1.5 w-1.5 rounded-full ${channel ? (connected ? "bg-[#5f7f63]" : "bg-destructive") : "bg-muted-foreground/40"}`}
+          className={`h-2 w-2 flex-shrink-0 rounded-full ${channel ? (connected ? "bg-[#5f7f63]" : "bg-destructive") : "bg-muted-foreground/40"}`}
         />
-        <span className="text-xs text-muted-foreground">
-          {channel ? (connected ? channel : `${channel} — reconnecting…`) : "No lobby — create one first"}
+        <span className="flex-1 truncate text-xs text-muted-foreground">
+          {channel
+            ? isTestMode
+              ? `${channel} - test mode (simulated)`
+              : connected ? channel : `${channel} - reconnecting…`
+            : "No lobby - create one first"}
         </span>
+        {timerEndsAt && (
+          <span className="flex-shrink-0 font-mono text-[10px] tabular-nums text-primary">
+            Timer active: {fmtCountdown(timerRemaining)}
+          </span>
+        )}
       </div>
 
       {/* Message list */}
       <div className="flex-1 overflow-y-auto p-3 space-y-1 text-xs font-mono">
-        {messages.length === 0 && (
-          <p className="text-muted-foreground/40 text-center pt-4">
-            {channel ? "Waiting for messages…" : "Connect a lobby to see IRC messages."}
-          </p>
-        )}
-        {messages.map((e, i) => (
+        {(() => {
+          const allMessages = [...messages, ...(simulatedMessages ?? [])].sort((a, b) => a.ts.localeCompare(b.ts))
+          if (allMessages.length === 0) return (
+            <p className="text-muted-foreground/40 text-center pt-4">
+              {channel ? "Waiting for messages…" : "Connect a lobby to see IRC messages."}
+            </p>
+          )
+          return allMessages.map((e, i) => (
           <div key={i} className="leading-relaxed">
             <span className="text-muted-foreground/60">[{fmtTime(e.ts)}]</span>{" "}
             {e.local ? (
@@ -123,12 +183,19 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
               </>
             )}
           </div>
-        ))}
+        ))
+        })()}
         <div ref={bottomRef} />
       </div>
 
       {/* Quick commands */}
-      <div className="flex-shrink-0 border-t border-border px-3 py-2">
+      <div className="relative flex-shrink-0 border-t border-border px-3 py-2">
+        {timerEndsAt && (
+          <div
+            className="pointer-events-none absolute top-0 left-0 h-px bg-primary transition-[width] duration-500 ease-linear"
+            style={{ width: `${timerTotal > 0 ? (timerRemaining / timerTotal) * 100 : 0}%` }}
+          />
+        )}
         <p className="mb-1.5 text-xs uppercase tracking-[0.14em] text-muted-foreground">Quick commands</p>
         <div className="flex flex-wrap gap-1.5">
           {([
@@ -159,7 +226,7 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
             type="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={isDemo ? "Demo mode — send disabled" : channel ? "!mp start 30" : "Create lobby first"}
+            placeholder={isDemo ? "Demo mode - send disabled" : channel ? "Send message" : "Create lobby first"}
             disabled={!channel || isDemo}
             className="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-1.5 font-mono text-xs placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-40"
             onKeyDown={(e) => { if (e.key === "Enter") void send() }}
@@ -168,19 +235,7 @@ export function IrcChat({ channel, refName, playerA, playerB, playerAOsuId, play
             Send
           </Button>
         </div>
-        <p className="font-mono text-xs text-muted-foreground/50 truncate">
-          {draft && channel ? (
-            <>
-              <span className="text-primary/60">{IRC_BOT}:</span>{" "}
-              <span className="text-muted-foreground/70">&lt;{refName}&gt;:</span>{" "}
-              {previewCmd}
-              {isMp && <span className="text-muted-foreground/30"> ← anti-spam suffix</span>}
-            </>
-          ) : (
-            `sends as: ${IRC_BOT}: <${refName}>: …`
-          )}
-        </p>
       </div>
     </div>
   )
-}
+})

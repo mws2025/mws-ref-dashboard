@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import type { IngKey, Inventory, Match, PoolMap } from "@/types"
-import { IrcChat, type LiveMsg } from "./IrcChat"
+import { LiveBadge } from "../LiveBadge"
+import { IrcChat, type IrcChatHandle, type LiveMsg } from "./IrcChat"
 import { MapActionModal } from "./MapActionModal"
 import { MappoolTable } from "./MappoolTable"
 import { PlayerColumn } from "./PlayerColumn"
 import { RecipePanel } from "./RecipePanel"
+import { TestSimPanel } from "./TestSimPanel"
 
 type EventKind = "join" | "leave" | "roll" | "abort" | "other_join" | "other_roll" | "info"
 
@@ -64,9 +65,10 @@ interface Props {
   match: Match
   onBack: () => void
   isDemo?: boolean
+  testMode?: boolean
 }
 
-export function MatchPanel({ match, onBack, isDemo = false }: Props) {
+export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: Props) {
   const [poolWidth, setPoolWidth] = useState(770)
   const [selectedMap, setSelectedMap] = useState<PoolMap | null>(null)
   const [liveMappool, setLiveMappool] = useState<PoolMap[] | null>(null)
@@ -79,8 +81,35 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
   const [rulesOpen, setRulesOpen] = useState(false)
   const [liveLobbyUrl, setLiveLobbyUrl] = useState<string | undefined>(undefined)
   const [liveEvents, setLiveEvents] = useState<MatchEvent[]>([])
+  const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
+  const [testResultUnlocked, setTestResultUnlocked] = useState(false)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
+  const ircRef = useRef<IrcChatHandle>(null)
+  const invSaveTimers = useRef<{ a: ReturnType<typeof setTimeout> | null; b: ReturnType<typeof setTimeout> | null }>({ a: null, b: null })
+
+  function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
+    if (testMode) return
+    const existing = invSaveTimers.current[player]
+    if (existing) clearTimeout(existing)
+    invSaveTimers.current[player] = setTimeout(async () => {
+      invSaveTimers.current[player] = null
+      try {
+        const res = await fetch(`/api/match/${match.id}/inventory`, {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ player: playerName, ...inv }),
+        })
+        if (!res.ok) {
+          const err = await res.json() as { error?: string }
+          toast.error(err.error ?? "Failed to save inventory")
+        }
+      } catch {
+        toast.error("Failed to save inventory")
+      }
+    }, 1500)
+  }
 
   const handleNewIrcMessage = useCallback((msg: LiveMsg) => {
     if (msg.from !== "BanchoBot") return
@@ -114,6 +143,34 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
     }
     void load()
   }, [match.id])
+
+  function injectIrcMsg(from: string, message: string, local = false) {
+    const msg: LiveMsg = { ts: new Date().toISOString(), from, message, ...(local ? { local: true } : {}) }
+    setSimulatedIrcMessages(prev => [...prev, msg])
+    handleNewIrcMessage(msg)
+  }
+
+  function simulateGameResult(slot: string, winner: string) {
+    setLiveMappool(prev => prev ? prev.map(m =>
+      m.slot === slot ? { ...m, status: "completed", winner } : m
+    ) : prev)
+    const isA = winner === match.playerA
+    const newScoreA = liveScoreA + (isA ? 1 : 0)
+    const newScoreB = liveScoreB + (!isA ? 1 : 0)
+    if (isA) setLiveScoreA(s => s + 1)
+    else setLiveScoreB(s => s + 1)
+    announceGameResult(newScoreA, newScoreB, isA ? match.playerB : match.playerA)
+  }
+
+  function announceGameResult(scoreA: number, scoreB: number, nextPicker: string) {
+    const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
+    const matchOver = scoreA >= winsNeeded || scoreB >= winsNeeded
+    ircRef.current?.send(`${match.playerA} | ${scoreA} - ${scoreB} | ${match.playerB}`)
+    if (!matchOver) {
+      setTimeout(() => ircRef.current?.send(`Next to pick: ${nextPicker}`), 600)
+      setTimeout(() => ircRef.current?.send(`!mp timer 120`), 1200)
+    }
+  }
 
   async function sendIrc(channel: string, message: string) {
     await fetch("/api/irc/send", {
@@ -194,6 +251,12 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
+      {testMode && (
+        <div className="flex flex-shrink-0 items-center gap-2 bg-amber-100 px-4 py-2 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+          <span className="font-semibold">TEST MODE</span>
+          <span className="text-amber-700 dark:text-amber-400">IRC and sheet writes are simulated. Use the Sim tab to run the match flow.</span>
+        </div>
+      )}
       {/* Header */}
       <header className="flex flex-shrink-0 items-stretch gap-3 border-b border-border px-4">
         <img src="/assets/logo_light.png" alt="Whisked 2026" className="my-2 h-8 w-auto self-center object-contain" />
@@ -206,19 +269,24 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
         </button>
         <Separator orientation="vertical" className="h-auto" />
         <span className="self-center font-heading text-sm">
-          {match.playerA} <span className="text-muted-foreground">vs</span> {match.playerB}
+          {match.playerA} <span className="font-sans normal-case text-muted-foreground">vs</span> {match.playerB}
         </span>
-        <Badge className="self-center border-0 bg-secondary text-secondary-foreground text-xs">{match.round}</Badge>
-        <Badge variant="default" className="self-center text-xs">Live</Badge>
-        <span className="ml-auto self-center font-mono text-xs text-muted-foreground">{liveLobbyUrl}</span>
-        {Object.values(matchRules).some(Boolean) && (
-          <button
-            onClick={() => setRulesOpen(true)}
-            className="self-center rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-          >
-            Rules
-          </button>
-        )}
+        <div className="self-center"><LiveBadge /></div>
+        <div className="ml-auto flex items-center gap-2 self-center">
+          {liveLobbyUrl && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {liveLobbyUrl.match(/\/mp\/(\d+)/)?.[1] ? `mp#${liveLobbyUrl.match(/\/mp\/(\d+)/)![1]}` : liveLobbyUrl}
+            </span>
+          )}
+          {Object.values(matchRules).some(Boolean) && (
+            <button
+              onClick={() => setRulesOpen(true)}
+              className="cursor-pointer rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+            >
+              Rules
+            </button>
+          )}
+        </div>
       </header>
 
       <Dialog open={rulesOpen} onOpenChange={setRulesOpen}>
@@ -258,10 +326,20 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
           invA={liveInventory?.a ?? INVENTORY_A}
           invB={liveInventory?.b ?? INVENTORY_B}
           round={match.round}
-          refName={match.referee ?? "—"}
+          refName={match.referee ?? "-"}
           streamer={match.streamer}
-          onInvAChange={(key: IngKey, delta: number) => setLiveInventory((prev) => prev ? { ...prev, a: { ...prev.a, [key]: Math.max(0, (prev.a[key] ?? 0) + delta) } } : prev)}
-          onInvBChange={(key: IngKey, delta: number) => setLiveInventory((prev) => prev ? { ...prev, b: { ...prev.b, [key]: Math.max(0, (prev.b[key] ?? 0) + delta) } } : prev)}
+          onInvAChange={(key: IngKey, delta: number) => setLiveInventory((prev) => {
+            if (!prev) return prev
+            const next = { ...prev.a, [key]: Math.max(0, (prev.a[key] ?? 0) + delta) }
+            scheduleInvSave("a", match.playerA, next)
+            return { ...prev, a: next }
+          })}
+          onInvBChange={(key: IngKey, delta: number) => setLiveInventory((prev) => {
+            if (!prev) return prev
+            const next = { ...prev.b, [key]: Math.max(0, (prev.b[key] ?? 0) + delta) }
+            scheduleInvSave("b", match.playerB, next)
+            return { ...prev, b: next }
+          })}
           onCreateLobby={() => void createLobby()}
           onJoinLobby={(mpId) => {
             setLiveLobbyUrl(`https://osu.ppy.sh/mp/${mpId}`)
@@ -299,10 +377,11 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
           matchStatus={liveMatchStatus}
           hasLobby={liveLobbyUrl !== undefined}
           isDemo={isDemo}
+          testResultUnlocked={testResultUnlocked}
         />
 
         <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
-          <MappoolTable mappool={liveMappool ?? undefined} onRowClick={setSelectedMap} />
+          <MappoolTable mappool={liveMappool ?? undefined} playerA={match.playerA} playerB={match.playerB} onRowClick={setSelectedMap} />
 
         </div>
 
@@ -320,6 +399,7 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
                 <TabsTrigger value="irc"     className="flex-1 text-xs">IRC</TabsTrigger>
                 <TabsTrigger value="recipes" className="flex-1 text-xs">Recipes</TabsTrigger>
                 <TabsTrigger value="logs"    className="flex-1 text-xs">Logs</TabsTrigger>
+                {testMode && <TabsTrigger value="sim" className="flex-1 text-xs text-amber-700 dark:text-amber-400">Sim</TabsTrigger>}
               </TabsList>
             </div>
 
@@ -335,7 +415,7 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
             <TabsContent value="logs" className="flex-1 overflow-y-auto p-4 space-y-1.5">
               <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Event log</p>
               {liveEvents.length === 0 && (
-                <p className="text-xs text-muted-foreground/40 text-center pt-4">No events yet — connect a lobby to see activity.</p>
+                <p className="text-xs text-muted-foreground/40 text-center pt-4">No events yet - connect a lobby to see activity.</p>
               )}
               {liveEvents.slice().reverse().map((e) => (
                 <div key={e.id} className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs flex items-start gap-2">
@@ -356,6 +436,7 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
 
             <TabsContent value="irc" forceMount className="flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden">
               <IrcChat
+                ref={ircRef}
                 channel={lobbyUrlToChannel(liveLobbyUrl)}
                 refName={match.referee ?? "Referee"}
                 playerA={match.playerA}
@@ -363,10 +444,27 @@ export function MatchPanel({ match, onBack, isDemo = false }: Props) {
                 playerAOsuId={match.playerAOsuId}
                 playerBOsuId={match.playerBOsuId}
                 isDemo={isDemo}
+                isTestMode={testMode}
+                simulatedMessages={simulatedIrcMessages}
                 onMessagesChange={(msgs) => { ircMessagesRef.current = msgs }}
                 onNewMessage={handleNewIrcMessage}
               />
             </TabsContent>
+
+            {testMode && (
+              <TabsContent value="sim" className="flex-1 overflow-y-auto p-4">
+                <TestSimPanel
+                  playerA={match.playerA}
+                  playerB={match.playerB}
+                  refName={match.referee ?? "Referee"}
+                  mappool={liveMappool}
+                  channel={lobbyUrlToChannel(liveLobbyUrl)}
+                  onInjectMessage={injectIrcMsg}
+                  onGameResult={simulateGameResult}
+                  onUnlockPostResult={() => setTestResultUnlocked(true)}
+                />
+              </TabsContent>
+            )}
           </Tabs>
         </aside>
       </div>
