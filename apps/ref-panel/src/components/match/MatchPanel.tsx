@@ -3,7 +3,6 @@ import { toast } from "sonner"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { POOL_CONFIG } from "@/data/constants"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
@@ -120,7 +119,7 @@ function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null)
     case "ban":
       return `${state.turnPlayer ?? "Next player"} bans an available map.`
     case "craft":
-      return `${state.turnPlayer ?? "Next player"} may craft in Recipes, then picks an available map.`
+      return `${state.turnPlayer ?? "Next player"} picks a map. Craft first if needed (Recipes tab).`
     case "play":
       return currentMap
         ? `Play ${currentMap.slot}; record scores in Match Control after both finish.`
@@ -168,7 +167,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const abbreviationRef = useRef("MWS")
 
   function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
-    if (testMode) return
     const existing = invSaveTimers.current[player]
     if (existing) clearTimeout(existing)
     invSaveTimers.current[player] = setTimeout(async () => {
@@ -266,10 +264,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   }
 
   async function postStateAction(body: Record<string, unknown>, localState: MatchFlowState) {
-    if (testMode) {
-      setFlowState(localState)
-      return
-    }
+    setFlowState(localState)
 
     const res = await fetch(`/api/match/${match.id}/state`, {
       method: "POST",
@@ -391,28 +386,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     setLiveScoreB(nextScoreB)
 
     const nextPicker = opponentOf(winner, match.playerA, match.playerB)
-    const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
-    const matchOver = nextScoreA >= winsNeeded || nextScoreB >= winsNeeded
-
-    if (testMode) {
-      const ingredient = map ? POOL_CONFIG[map.pool]?.ing : null
-      if (ingredient && !wasCompleted) {
-        setLiveInventory((prev) => {
-          if (!prev) return prev
-          const side = winnerIsA ? "a" : "b"
-          return { ...prev, [side]: { ...prev[side], [ingredient]: prev[side][ingredient] + 1 } }
-        })
-      }
-      setFlowState((prev) => prev ? {
-        ...prev,
-        phase: matchOver ? "ready_result" : "craft",
-        turnPlayer: matchOver ? undefined : nextPicker,
-        currentSlot: undefined,
-        updatedAt: new Date().toISOString(),
-      } : prev)
-      announceGameResult(nextScoreA, nextScoreB, nextPicker)
-      return
-    }
 
     void fetch(`/api/match/${match.id}/score`, {
       method: "POST",
@@ -462,11 +435,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     const usedId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     setUsedRecipes((prev) => [...prev, { id: usedId, player, recipeId, snapshot: currentInv }])
 
-    if (testMode) {
-      toast.success(`${recipe.name} crafted`)
-      return
-    }
-
     void fetch(`/api/match/${match.id}/recipe`, {
       method: "POST",
       credentials: "include",
@@ -509,12 +477,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
 
   function postMatchResult() {
     const winner = liveScoreA > liveScoreB ? match.playerA : match.playerB
-    if (testMode) {
-      setLiveMatchStatus("completed")
-      setFlowState((prev) => prev ? { ...prev, phase: "completed", updatedAt: new Date().toISOString() } : prev)
-      toast.success("Match result posted")
-      return
-    }
 
     void fetch(`/api/match/${match.id}/post-result`, {
       method: "POST",
@@ -904,7 +866,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
               : flowState?.phase === "ban" && flowState.turnPlayer
               ? `${flowState.turnPlayer} must ban next.`
               : flowState?.phase === "craft" && flowState.turnPlayer
-                ? `${flowState.turnPlayer} may craft, then pick.`
+                ? `${flowState.turnPlayer} to pick. Craft is optional.`
                 : "Finish the current flow phase before choosing a map."
         }
         onClose={() => setSelectedMap(null)}

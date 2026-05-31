@@ -127,7 +127,7 @@ function ActiveRecipes({ entries, onUndo }: { entries: UsedRecipeEntry[]; onUndo
   if (entries.length === 0) return null
   return (
     <div className="space-y-1.5">
-      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Active</p>
+      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Used</p>
       {entries.map((entry) => {
         const recipe = RECIPES.find((r) => r.id === entry.recipeId)
         if (!recipe) return null

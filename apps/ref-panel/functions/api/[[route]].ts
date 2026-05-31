@@ -131,7 +131,7 @@ const MATCH_STATE_HEADERS = [
 const INVENTORY_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
 const POOL_TO_INGREDIENT: Record<string, keyof InventoryMap | undefined> = {
   NM: "egg",
-  HD: "sugar",
+  PS: "sugar",
   HR: "butter",
   DT: "flour",
   FM: "milk",
@@ -314,9 +314,42 @@ async function getGoogleAccessToken(env: Bindings): Promise<string> {
   return accessToken
 }
 
+// Module-level read cache — survives across requests on the same CF isolate (burst window)
+const _sheetCache = new Map<string, { data: string[][]; ts: number }>()
+const _CACHE_TTL: Partial<Record<string, number>> = {
+  "config!A:B":   30_000,
+  "mappool!A1:Z": 30_000,
+  "items!A1:Z":   30_000,
+  "matches!A1:Z": 10_000,
+}
+const _DEFAULT_TTL = 8_000
+
+function _cacheGet(range: string): string[][] | null {
+  const entry = _sheetCache.get(range)
+  if (!entry) return null
+  const ttl = _CACHE_TTL[range] ?? _DEFAULT_TTL
+  if (Date.now() - entry.ts > ttl) { _sheetCache.delete(range); return null }
+  return entry.data
+}
+
+function _cacheSet(range: string, data: string[][]): void {
+  _sheetCache.set(range, { data, ts: Date.now() })
+}
+
+function _cacheInvalidate(sheetName: string): void {
+  const prefix = sheetName.replace(/!.*/, "").toLowerCase()
+  for (const key of _sheetCache.keys()) {
+    if (key.toLowerCase().startsWith(prefix)) _sheetCache.delete(key)
+  }
+}
+
 async function getSheetValuesSafe(env: Bindings, rangeA1: string): Promise<string[][]> {
+  const cached = _cacheGet(rangeA1)
+  if (cached) return cached
   try {
-    return await getSheetValues(env, rangeA1)
+    const data = await getSheetValues(env, rangeA1)
+    _cacheSet(rangeA1, data)
+    return data
   } catch {
     return []
   }
@@ -354,7 +387,7 @@ async function getAccessRows(env: Bindings): Promise<string[][]> {
 }
 
 function normalizeHeader(header: string): string {
-  return header.trim().toLowerCase()
+  return header.trim().toLowerCase().replace(/[\s-]+/g, "_")
 }
 
 function sheetRowsToRecords(values: string[][]): SheetRecord[] {
@@ -787,6 +820,7 @@ function formatToLobbySize(format: string): number {
 }
 
 async function writeSheetCell(env: Bindings, rangeA1: string, value: string): Promise<void> {
+  _cacheInvalidate(rangeA1.split("!")[0])
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const accessToken = await getGoogleAccessToken(env)
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(rangeA1)}?valueInputOption=RAW`
@@ -813,6 +847,7 @@ function colLetter(idx: number): string {
 }
 
 async function appendSheetRow(env: Bindings, sheetName: string, row: string[]): Promise<void> {
+  _cacheInvalidate(sheetName)
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const accessToken = await getGoogleAccessToken(env)
   const range = encodeURIComponent(`${sheetName}!A:Z`)
@@ -863,6 +898,7 @@ async function updateMatchFields(env: Bindings, matchId: string, fields: Record<
     data.push({ range: `matches!${colLetter(colIdx)}${rowNum}`, values: [[value]] })
   }
 
+  _cacheInvalidate("matches")
   const accessToken = await getGoogleAccessToken(env)
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`
   const res = await fetch(url, {
@@ -878,6 +914,7 @@ async function updateMatchFields(env: Bindings, matchId: string, fields: Record<
 
 async function batchUpdateValues(env: Bindings, data: { range: string; values: string[][] }[]): Promise<void> {
   if (data.length === 0) return
+  data.forEach((d) => _cacheInvalidate(d.range.split("!")[0]))
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const accessToken = await getGoogleAccessToken(env)
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchUpdate`
@@ -941,7 +978,7 @@ function parseNumberCell(value: string | undefined): number | undefined {
 function normalizeHomeMod(value: unknown): HomeMod | undefined {
   if (typeof value !== "string") return undefined
   const normalized = value.trim().toUpperCase()
-  return ["NM", "HD", "HR", "DT", "FM"].includes(normalized) ? normalized as HomeMod : undefined
+  return ["NM", "PS", "HR", "DT", "FM"].includes(normalized) ? normalized as HomeMod : undefined
 }
 
 function opponentOf(player: string, playerA: string, playerB: string): string {
@@ -1464,13 +1501,6 @@ app.put("/api/match/:matchId/inventory", async (c) => {
   const player = typeof body.player === "string" ? body.player.trim() : ""
   if (!player) return c.json({ error: "player required" }, 400)
 
-  // #TEST-MODE-START
-  const configMap = await getConfigMap(c.env)
-  if (isTestMode(configMap)) {
-    return c.json({ ok: true, simulated: true })
-  }
-  // #TEST-MODE-END
-
   try {
     const sheetId = mustEnv(c.env, "GOOGLE_SHEETS_TOURNAMENT_ID")
     const inventoryValues = await getSheetValuesSafe(c.env, "inventory!A1:Z")
@@ -1555,13 +1585,6 @@ app.post("/api/match/:matchId/state", async (c) => {
   }
 
   const action = typeof body.action === "string" ? body.action : ""
-
-  // #TEST-MODE-START
-  const configMap = await getConfigMap(c.env)
-  if (isTestMode(configMap)) {
-    return c.json({ ok: true, simulated: true })
-  }
-  // #TEST-MODE-END
 
   try {
     const match = await getMatchById(c.env, matchId)
@@ -1653,12 +1676,6 @@ app.post("/api/match/:matchId/score", async (c) => {
     return c.json({ error: "winner must be one of the match players" }, 400)
   }
 
-  // #TEST-MODE-START
-  const scoreCfgMap = await getConfigMap(c.env)
-  if (isTestMode(scoreCfgMap)) {
-    return c.json({ ok: true, simulated: true, slot, winner, scoreA, scoreB })
-  }
-  // #TEST-MODE-END
 
   try {
     const match = await getMatchById(c.env, matchId)
@@ -1738,6 +1755,153 @@ app.post("/api/match/:matchId/score", async (c) => {
   }
 })
 
+async function buildAndPostResultEmbed(
+  env: Bindings,
+  matchId: string,
+  playerA: string,
+  playerB: string,
+  scoreA: number,
+  scoreB: number,
+  winner: string,
+): Promise<void> {
+  const configMap = await getConfigMap(env)
+  const resultWebhook = configMap.get("result webhook")?.trim()
+  if (!resultWebhook) return
+
+  const abbreviation = configMap.get("abbreviation") ?? "MWS"
+  const match        = await getMatchById(env, matchId)
+  const round        = match?.round ?? ""
+  const lobbyUrl     = match?.lobbyUrl ?? ""
+  const mpId         = lobbyUrl.match(/\/mp\/(\d+)/)?.[1] ?? (/^\d+$/.test(lobbyUrl.trim()) ? lobbyUrl.trim() : undefined)
+
+  const [matchMapValues, itemEventValues, itemValues] = await Promise.all([
+    getSheetValuesSafe(env, "match_maps!A1:Z"),
+    getSheetValuesSafe(env, "item_events!A1:Z"),
+    getSheetValuesSafe(env, "items!A1:Z"),
+  ])
+  const matchMaps   = sheetRowsToRecords(matchMapValues)
+    .filter((r) => firstValue(r, ["match_id"]) === matchId)
+  const itemEvents  = sheetRowsToRecords(itemEventValues)
+    .filter((r) => firstValue(r, ["match_id"]) === matchId && firstValue(r, ["action"]) === "use")
+  const itemNameMap = new Map<string, string>()
+  for (const r of sheetRowsToRecords(itemValues)) {
+    const id   = firstValue(r, ["item_id", "id"])
+    const name = firstValue(r, ["name"])
+    if (id && name) itemNameMap.set(id, name)
+  }
+
+  const bans  = matchMaps.filter((r) => firstValue(r, ["status"]) === "banned")
+  const picks = matchMaps.filter((r) => firstValue(r, ["status"]) === "completed")
+
+  // osu! API — match duration (best-effort)
+  let durationStr = ""
+  if (mpId) {
+    try {
+      const clientId     = env.OSU_CLIENT_ID?.trim()
+      const clientSecret = env.OSU_CLIENT_SECRET?.trim()
+      if (clientId && clientSecret) {
+        const tokenRes = await fetch(`${osuApiBase(env)}/oauth/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+          body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: "client_credentials", scope: "public" }),
+        })
+        if (tokenRes.ok) {
+          const tokenJson = await tokenRes.json() as { access_token?: string }
+          const token = tokenJson.access_token
+          if (token) {
+            const mpRes = await fetch(`${osuApiBase(env)}/api/v2/matches/${mpId}`, {
+              headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+            })
+            if (mpRes.ok) {
+              const mpData = await mpRes.json() as { match?: { start_time?: string; end_time?: string } }
+              const start = mpData.match?.start_time
+              const end   = mpData.match?.end_time
+              if (start && end) {
+                const totalMin = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
+                const h = Math.floor(totalMin / 60)
+                const m = totalMin % 60
+                durationStr = h > 0 ? `${h}h ${m}m` : `${m}m`
+              }
+            }
+          }
+        }
+      }
+    } catch { /* best-effort */ }
+  }
+
+  const eA = "🔴"
+  const eB = "🔵"
+  const pEmoji = (name: string) => name.toLowerCase() === playerA.toLowerCase() ? eA : eB
+  const winnerIsA = winner.toLowerCase() === playerA.toLowerCase()
+
+  const bansGrouped = new Map<string, string[]>()
+  for (const r of bans) {
+    const slot = firstValue(r, ["slot"])
+    const by   = firstValue(r, ["banned_by"])
+    const key  = pEmoji(by)
+    bansGrouped.set(key, [...(bansGrouped.get(key) ?? []), `\`${slot}\``])
+  }
+  const bansValue = bansGrouped.size > 0
+    ? [...bansGrouped.entries()].map(([emoji, slots]) => `${emoji} ${slots.join(", ")}`).join("\n")
+    : "None"
+
+  const picksValue = picks.length > 0
+    ? picks.map((r) => {
+        const slot     = firstValue(r, ["slot"])
+        const pickedBy = firstValue(r, ["picked_by"])
+        const mapWon   = firstValue(r, ["winner"])
+        return `${pEmoji(pickedBy)} \`${slot}\` - ${pEmoji(mapWon)}`
+      }).join("\n")
+    : "None"
+
+  // Recipes used grouped by player
+  const recipesA = itemEvents
+    .filter((r) => firstValue(r, ["player"]).toLowerCase() === playerA.toLowerCase())
+    .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
+    .filter(Boolean)
+  const recipesB = itemEvents
+    .filter((r) => firstValue(r, ["player"]).toLowerCase() === playerB.toLowerCase())
+    .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
+    .filter(Boolean)
+  const recipesValue = [
+    ...(recipesA.length > 0 ? [`${eA} ${recipesA.join(", ")}`] : []),
+    ...(recipesB.length > 0 ? [`${eB} ${recipesB.join(", ")}`] : []),
+  ].join("\n") || "None"
+
+  const embedColor = winnerIsA ? 0xa4564e : 0x6f8ea5
+  const scoreLine = winnerIsA
+    ? `### 🏆 ${eA} **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** ${eB}`
+    : `### ${eA} **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** ${eB} 🏆`
+  const mpLine     = mpId ? `https://osu.ppy.sh/mp/${mpId}` : null
+  const scoreStr   = [scoreLine, mpLine].filter(Boolean).join("\n")
+  const footerParts: string[] = []
+  if (durationStr) footerParts.push(`Duration: ${durationStr}`)
+
+  const roundPart = round ? `${round} - ` : ""
+  const title     = `${abbreviation} ${roundPart}Match ${matchId}`
+
+  const fields = [
+    { name: "Bans",            value: bansValue,    inline: true },
+    { name: "Picks - Winner",  value: picksValue,   inline: true },
+    ...(recipesValue !== "None" ? [{ name: "Recipes used", value: recipesValue, inline: false }] : []),
+  ]
+
+  await fetch(resultWebhook, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      embeds: [{
+        title,
+        color:       embedColor,
+        description: scoreStr,
+        fields,
+        footer:      footerParts.length > 0 ? { text: footerParts.join(" · ") } : undefined,
+        timestamp:   new Date().toISOString(),
+      }],
+    }),
+  }).catch(() => {})
+}
+
 app.post("/api/match/:matchId/post-result", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
@@ -1753,12 +1917,6 @@ app.post("/api/match/:matchId/post-result", async (c) => {
   const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
   if (!playerA || !playerB) return c.json({ error: "playerA and playerB required" }, 400)
 
-  // #TEST-MODE-START
-  const postResultCfgMap = await getConfigMap(c.env)
-  if (isTestMode(postResultCfgMap)) {
-    return c.json({ ok: true, simulated: true })
-  }
-  // #TEST-MODE-END
 
   try {
     const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
@@ -1791,6 +1949,7 @@ app.post("/api/match/:matchId/post-result", async (c) => {
       JSON.stringify(before ?? {}),
       JSON.stringify({ status: "completed", winner, scoreA, scoreB }),
     ).catch(() => {})
+    await buildAndPostResultEmbed(c.env, matchId, playerA, playerB, scoreA, scoreB, winner)
     return c.json({ ok: true, winner, scoreA, scoreB, state })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Post result failed" }, 500)
@@ -1813,12 +1972,6 @@ app.post("/api/match/:matchId/recipe", async (c) => {
   const target = typeof body.target === "string" ? body.target.trim() : ""
   if (!player || !recipeIdRaw) return c.json({ error: "player and recipeId required" }, 400)
 
-  // #TEST-MODE-START
-  const recipeCfgMap = await getConfigMap(c.env)
-  if (isTestMode(recipeCfgMap)) {
-    return c.json({ ok: true, simulated: true })
-  }
-  // #TEST-MODE-END
 
   try {
     const itemRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "items!A1:Z"))
@@ -2063,6 +2216,24 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     const fakeFollowUpCmds: string[] = [`!mp set ${teamMode} ${scoringMode} ${lobbySize}`]
     if (enforceNF) fakeFollowUpCmds.push("!mp mods NF")
     if (refUsername) fakeFollowUpCmds.push(`!mp addref ${refUsername}`)
+    try { await updateMatchField(c.env, matchId, "lobby_url", fakeLobbyUrl) } catch {}
+    if (staffWebhook) {
+      await fetch(staffWebhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [{
+            title: `Lobby Created — Match ${matchId}`,
+            description: `**${title}**\n\n\`\`\`\n${fakeChannel}\n\`\`\``,
+            color: 0x5f7f63,
+            fields: [
+              { name: "Channel", value: `\`${fakeChannel}\``, inline: true },
+              { name: "MP Link", value: fakeLobbyUrl, inline: false },
+            ],
+          }],
+        }),
+      }).catch(() => {})
+    }
     return c.json({ ok: true, lobbyUrl: fakeLobbyUrl, channel: fakeChannel, mpId: fakeId, followUpCmds: fakeFollowUpCmds })
   }
   // #TEST-MODE-END
@@ -2165,9 +2336,29 @@ app.post("/api/match/:matchId/close-lobby", async (c) => {
 
   const { channel, messages = [] } = body
 
-  // #TEST-MODE-START
   const closeCfgMap = await getConfigMap(c.env)
+
+  // #TEST-MODE-START
   if (isTestMode(closeCfgMap)) {
+    const logLines = messages.map((m) => {
+      const time = new Date(m.ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      return `[${time}] ${m.local ? "(sent) " : ""}${m.from}: ${m.message}`
+    })
+    const logText = logLines.length > 0 ? logLines.join("\n") : "(no messages recorded)"
+    const staffWebhook = closeCfgMap.get("staff webhook")?.trim()
+    if (staffWebhook) {
+      const form = new FormData()
+      form.append("payload_json", JSON.stringify({
+        embeds: [{
+          title: `Lobby Closed — Match ${matchId}`,
+          description: channel ? `Channel: \`${channel}\`` : "No channel recorded",
+          color: 0x8d3f38,
+          footer: { text: `${messages.length} messages · ${new Date().toUTCString()}` },
+        }],
+      }))
+      form.append("files[0]", new Blob([logText], { type: "text/plain" }), `match_${matchId}_chat.txt`)
+      await fetch(staffWebhook, { method: "POST", body: form }).catch(() => {})
+    }
     return c.json({ ok: true, messageCount: messages.length })
   }
   // #TEST-MODE-END
@@ -2223,12 +2414,6 @@ app.post("/api/match/:matchId/remind", async (c) => {
   ])
 
   const reminderWebhook = configMap.get("reminder webhook")?.trim()
-
-  // #TEST-MODE-START
-  if (isTestMode(configMap)) {
-    return c.json({ ok: true, simulated: true })
-  }
-  // #TEST-MODE-END
 
   if (!reminderWebhook) {
     return c.json({ error: "Reminder webhook not configured in config sheet" }, 503)
@@ -2306,15 +2491,16 @@ app.post("/api/match/:matchId/join-lobby", async (c) => {
   const channel = `#mp_${mpId}`
   const lobbyUrl = `https://osu.ppy.sh/mp/${mpId}`
 
-  // #TEST-MODE-START
   const joinCfgMap = await getConfigMap(c.env)
-  if (isTestMode(joinCfgMap)) {
-    return c.json({ ok: true, alive: true, simulated: true, lobbyUrl, channel })
-  }
-  // #TEST-MODE-END
-
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
+
+  // #TEST-MODE-START — skip IRC alive check, sheet write still runs below
+  if (isTestMode(joinCfgMap)) {
+    try { await updateMatchField(c.env, matchId, "lobby_url", lobbyUrl) } catch {}
+    return c.json({ ok: true, alive: true, lobbyUrl, channel })
+  }
+  // #TEST-MODE-END
 
   let alive = false
   if (relayUrl && relaySecret) {
@@ -2387,13 +2573,7 @@ app.post("/api/match/:matchId/action", async (c) => {
 
   const actionPlayer = player ?? ""
   const status = action === "pick" ? "picked" : action === "ban" ? "banned" : action === "protect" ? "protected" : "available"
-
-  // #TEST-MODE-START
   const actionCfgMap = await getConfigMap(c.env)
-  if (isTestMode(actionCfgMap)) {
-    return c.json({ ok: true, slot, action, player, status, simulated: true })
-  }
-  // #TEST-MODE-END
 
   try {
     const match = await getMatchById(c.env, matchId)
@@ -2549,12 +2729,6 @@ app.post("/api/match/:matchId/forfeit", async (c) => {
     score_b: loserIsA ? "0" : "-1",
   }
 
-  // #TEST-MODE-START
-  const forfeitCfgMap = await getConfigMap(c.env)
-  if (isTestMode(forfeitCfgMap)) {
-    return c.json({ ok: true, winner, loser: loserIsA ? playerA : playerB, simulated: true })
-  }
-  // #TEST-MODE-END
 
   try {
     await updateMatchFields(c.env, matchId, fields)

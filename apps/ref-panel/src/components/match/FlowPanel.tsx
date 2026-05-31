@@ -27,7 +27,7 @@ const PHASE_LABEL: Record<MatchFlowState["phase"], string> = {
   order: "Order choice",
   home_mod: "Home mod",
   ban: "Ban",
-  craft: "Craft / pick",
+  craft: "Pick",
   play: "Play",
   ready_result: "Ready result",
   completed: "Completed",
@@ -87,7 +87,7 @@ export function FlowPanel({
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           {state.phase === "ban" && state.turnPlayer ? `${state.turnPlayer} bans next.` : null}
-          {state.phase === "craft" && state.turnPlayer ? `${state.turnPlayer} may craft, then picks a map.` : null}
+          {state.phase === "craft" && state.turnPlayer ? `${state.turnPlayer} picks a map. Craft first if needed (Recipes tab).` : null}
           {state.phase === "play" && currentMap ? `${currentMap.slot} is in play. Record the score after both players finish.` : null}
           {state.phase === "ready_result" ? "Match point target reached. Post the result from the left panel." : null}
           {state.phase === "completed" ? "Final result has been posted." : null}

@@ -61,19 +61,34 @@ export function TestSimPanel({
     onInjectMessage(IRC_BOT, `<${refName}>: ${player} to pick next!`, true)
   }
 
-  function simulateResult(slot: string, winner: string) {
+  function simMods(pool: string): string {
+    const p = pool.toUpperCase()
+    if (p === "FM" || p === "TB") return "Freemod"
+    if (p === "HR") return "HR"
+    if (p === "DT") return "DT"
+    return "None"
+  }
+
+  function simulateResult(map: PoolMap, winner: string) {
     const loser = winner === playerA ? playerB : playerA
     const winScore  = 800000 + Math.floor(Math.random() * 400000)
     const loseScore = 400000 + Math.floor(Math.random() * Math.min(winScore - 400001, 350000))
 
-    onInjectMessage("BanchoBot", `${winner} finished playing (Score: ${winScore.toLocaleString()}, PASSED).`)
+    // Inject pick sequence commands
+    if (map.beatmapId) onInjectMessage(IRC_BOT, `!mp map ${map.beatmapId} 0`, true)
+    onInjectMessage(IRC_BOT, `!mp mods ${simMods(map.pool)}`, true)
+    setTimeout(() => onInjectMessage(IRC_BOT, `!mp timer 120`, true), 300)
+    setTimeout(() => onInjectMessage(IRC_BOT, `!mp start 10`, true), 600)
     setTimeout(() => {
-      onInjectMessage("BanchoBot", `${loser} finished playing (Score: ${loseScore.toLocaleString()}, PASSED).`)
-    }, 350)
+      onInjectMessage("BanchoBot", `${winner} finished playing (Score: ${winScore.toLocaleString()}, PASSED).`)
+      setTimeout(() => {
+        onInjectMessage("BanchoBot", `${loser} finished playing (Score: ${loseScore.toLocaleString()}, PASSED).`)
+      }, 350)
+    }, 1000)
 
-    setResultedSlots(prev => new Set([...prev, slot]))
+    setResultedSlots(prev => new Set([...prev, map.slot]))
     onGameResult(
-      slot,
+      map.slot,
       winner,
       winner === playerA ? winScore : loseScore,
       winner === playerB ? winScore : loseScore,
@@ -188,10 +203,10 @@ export function TestSimPanel({
               <div key={m.slot} className="rounded-md border border-border/60 bg-card/30 px-2.5 py-2 space-y-1.5">
                 <p className="text-[10px] font-heading font-bold text-muted-foreground">{m.slot}</p>
                 <div className="flex gap-1.5">
-                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m.slot, playerA)}>
+                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m, playerA)}>
                     {playerA} wins
                   </Button>
-                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m.slot, playerB)}>
+                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m, playerB)}>
                     {playerB} wins
                   </Button>
                 </div>
