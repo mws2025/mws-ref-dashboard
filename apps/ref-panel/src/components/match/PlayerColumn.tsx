@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Check, Pencil } from "lucide-react"
+import { Check, Pencil, TriangleAlert } from "lucide-react"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -25,7 +25,7 @@ function WinBoxes({ score, needed }: { score: number; needed: number }) {
 function IngredientBar({ inv, editing, onChange, onToggleEdit }: { inv: Inventory; editing?: boolean; onChange?: (key: IngKey, delta: number) => void; onToggleEdit?: () => void }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="mt-2 rounded-md border border-border/60 bg-muted/30 px-2 py-2">
+    <div className="rounded-md border border-border/60 bg-muted/30 px-2 py-2">
       <div className={`flex items-center justify-between ${open ? "mb-2" : ""}`}>
         <button
           className="flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
@@ -91,7 +91,7 @@ function HomeModControl({
   onClear?: () => void
 }) {
   return (
-    <div className="mt-2 rounded-md border border-border/60 bg-card/35 px-2 py-2">
+    <div className="rounded-md border border-border/60 bg-card/35 px-2 py-2">
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Home mod</span>
         <div className="flex items-center gap-1">
@@ -159,6 +159,9 @@ interface Props {
   onClearHomeMod?: (player: string) => void
   onScoreAEdit?: (val: number) => void
   onScoreBEdit?: (val: number) => void
+  lobbyNameMismatch?: { found: string; expected: string }
+  onRetryJoin?: () => void
+  onClearLobbyMismatch?: () => void
   matchStatus?: MatchStatus
   hasLobby?: boolean
   isDemo?: boolean
@@ -181,6 +184,7 @@ export function PlayerColumn({
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit,
   homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
   onScoreAEdit, onScoreBEdit,
+  lobbyNameMismatch, onRetryJoin, onClearLobbyMismatch,
   matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
   const winsNeeded = Math.ceil(bestOf / 2)
@@ -213,25 +217,27 @@ export function PlayerColumn({
       <div className="flex-1 overflow-y-auto">
         {/* Player A */}
         <div className="space-y-2 border-b border-border px-4 pb-4 pt-4">
-          <div className="flex min-h-9 items-start justify-between gap-2">
-            <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerA}</span>
-            {invLoading ? <Skeleton className="h-7 w-8" /> : (
-              <div className="flex items-center gap-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="min-w-0 break-words font-heading text-sm font-semibold leading-tight">{playerA}</span>
+            {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none tabular-nums">{scoreA}</span>}
+          </div>
+          {invLoading ? <Skeleton className="h-3 w-28" /> : (
+            <div className="flex items-center justify-between">
+              <WinBoxes score={scoreA} needed={winsNeeded} />
+              <div className="flex items-center gap-0.5">
                 <button
-                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
                   disabled={isDemo || scoreA <= 0}
                   onClick={() => onScoreAEdit?.(scoreA - 1)}
                 >−</button>
-                <span className="w-6 text-center font-heading text-3xl leading-none tabular-nums">{scoreA}</span>
                 <button
-                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
                   disabled={isDemo}
                   onClick={() => onScoreAEdit?.(scoreA + 1)}
                 >+</button>
               </div>
-            )}
-          </div>
-          {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreA} needed={winsNeeded} />}
+            </div>
+          )}
           <HomeModControl
             value={homeModA}
             canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerA.toLowerCase()}
@@ -244,27 +250,36 @@ export function PlayerColumn({
           }
         </div>
 
+        {/* vs divider */}
+        <div className="flex items-center gap-2 px-4 py-1.5">
+          <div className="h-px flex-1 bg-border/40" />
+          <span className="text-[10px] text-muted-foreground/40">vs</span>
+          <div className="h-px flex-1 bg-border/40" />
+        </div>
+
         {/* Player B */}
-        <div className="space-y-2 border-b border-border px-4 pb-4 pt-4">
-          <div className="flex min-h-9 items-start justify-between gap-2">
-            <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerB}</span>
-            {invLoading ? <Skeleton className="h-7 w-8" /> : (
-              <div className="flex items-center gap-1">
+        <div className="space-y-2 border-b border-border px-4 pb-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="min-w-0 break-words font-heading text-sm font-semibold leading-tight">{playerB}</span>
+            {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none tabular-nums">{scoreB}</span>}
+          </div>
+          {invLoading ? <Skeleton className="h-3 w-28" /> : (
+            <div className="flex items-center justify-between">
+              <WinBoxes score={scoreB} needed={winsNeeded} />
+              <div className="flex items-center gap-0.5">
                 <button
-                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
                   disabled={isDemo || scoreB <= 0}
                   onClick={() => onScoreBEdit?.(scoreB - 1)}
                 >−</button>
-                <span className="w-6 text-center font-heading text-3xl leading-none tabular-nums">{scoreB}</span>
                 <button
-                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
                   disabled={isDemo}
                   onClick={() => onScoreBEdit?.(scoreB + 1)}
                 >+</button>
               </div>
-            )}
-          </div>
-          {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreB} needed={winsNeeded} />}
+            </div>
+          )}
           <HomeModControl
             value={homeModB}
             canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerB.toLowerCase()}
@@ -278,11 +293,19 @@ export function PlayerColumn({
         </div>
 
         {/* Match meta */}
-        <div className="space-y-1.5 p-4 text-xs text-muted-foreground">
-          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Format</span> <span className="ml-1">Bo{bestOf}</span></p>
-          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Round</span> <span className="ml-1">{round}</span></p>
-          <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Ref</span> <span className="ml-1">{refName}</span></p>
-          {streamer && <p><span className="font-heading uppercase tracking-[0.12em] text-foreground">Streamer</span> <span className="ml-1">{streamer}</span></p>}
+        <div className="border-t border-border p-4">
+          <div className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5 text-xs">
+            <span className="font-heading uppercase tracking-[0.12em] text-muted-foreground">Format</span>
+            <span className="text-foreground">Bo{bestOf}</span>
+            <span className="font-heading uppercase tracking-[0.12em] text-muted-foreground">Round</span>
+            <span className="text-foreground">{round}</span>
+            <span className="font-heading uppercase tracking-[0.12em] text-muted-foreground">Ref</span>
+            <span className="text-foreground">{refName}</span>
+            {streamer && <>
+              <span className="font-heading uppercase tracking-[0.12em] text-muted-foreground">Streamer</span>
+              <span className="text-foreground">{streamer}</span>
+            </>}
+          </div>
         </div>
 
         {/* Pool legend */}
@@ -319,10 +342,10 @@ export function PlayerColumn({
           </>
         )}
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo} onClick={() => setConfirmAction("reminder")}>Match reminder</Button>
-        <Separator className="my-1" />
+        <Separator className="my-2" />
         {/* Result */}
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={!canPostResult} onClick={() => setConfirmAction("result")}>Post match result</Button>
-        <Separator className="my-1" />
+        <Separator className="my-2" />
         {/* Danger */}
         {!isFinished && (
           <Button size="sm" variant="outline" className="w-full text-xs border-destructive/40 text-destructive/80 hover:border-destructive hover:text-destructive hover:bg-destructive/5" disabled={isDemo} onClick={() => setForfeitOpen(true)}>Set forfeit</Button>
@@ -339,6 +362,14 @@ export function PlayerColumn({
             <AlertDialogTitle>{confirmAction ? LOBBY_CONFIRM_CONFIG[confirmAction].title : ""}</AlertDialogTitle>
             <AlertDialogDescription>{confirmAction ? LOBBY_CONFIRM_CONFIG[confirmAction].description : ""}</AlertDialogDescription>
           </AlertDialogHeader>
+          {confirmAction === "create" && (
+            <div className="flex gap-2.5 rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2.5 dark:border-amber-500/40 dark:bg-amber-950/40">
+              <TriangleAlert className="mt-px h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+              <p className="text-xs leading-relaxed text-amber-900 dark:text-amber-200">
+                <span className="font-semibold">Make sure your own IRC client is open and connected</span> before creating the lobby. If this site goes down mid-match, you will need it to keep the match going.
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
             <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
             <AlertDialogAction
@@ -399,6 +430,50 @@ export function PlayerColumn({
           </div>
           <DialogFooter>
             <Button size="sm" variant="ghost" className="w-full text-xs text-muted-foreground" onClick={() => setForfeitOpen(false)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Lobby name mismatch warning */}
+      <Dialog open={!!lobbyNameMismatch} onOpenChange={(open) => { if (!open) onClearLobbyMismatch?.() }}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="h-4 w-4 text-amber-500" />
+              Wrong lobby
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2.5 dark:border-amber-500/40 dark:bg-amber-950/40">
+              <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">The lobby you joined does not match this match.</p>
+            </div>
+            <div className="space-y-1.5 text-xs">
+              <div className="flex gap-2">
+                <span className="w-16 flex-shrink-0 text-muted-foreground">Found</span>
+                <span className="font-mono text-destructive">{lobbyNameMismatch?.found}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="w-16 flex-shrink-0 text-muted-foreground">Expected</span>
+                <span className="font-mono text-foreground">{lobbyNameMismatch?.expected}</span>
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="flex-col gap-1.5 sm:flex-col">
+            <Button
+              size="sm"
+              className="w-full text-xs"
+              onClick={() => { onRetryJoin?.(); setJoinOpen(true) }}
+            >
+              Try another lobby ID
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="w-full text-xs text-muted-foreground"
+              onClick={() => onClearLobbyMismatch?.()}
+            >
+              Continue anyway
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

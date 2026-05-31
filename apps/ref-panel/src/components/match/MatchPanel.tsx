@@ -159,10 +159,13 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
   const [testResultUnlocked, setTestResultUnlocked] = useState(false)
   const [usedRecipes, setUsedRecipes] = useState<UsedRecipe[]>([])
+  const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
   const ircRef = useRef<IrcChatHandle>(null)
   const invSaveTimers = useRef<{ a: ReturnType<typeof setTimeout> | null; b: ReturnType<typeof setTimeout> | null }>({ a: null, b: null })
+  const pendingRoomCheck = useRef(false)
+  const abbreviationRef = useRef("MWS")
 
   function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
     if (testMode) return
@@ -189,6 +192,24 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
 
   const handleNewIrcMessage = useCallback((msg: LiveMsg) => {
     if (msg.from !== "BanchoBot") return
+
+    // Room name check after join
+    if (pendingRoomCheck.current) {
+      const roomNameM = msg.message.match(/^Room name: (.+), History:/)
+      if (roomNameM) {
+        pendingRoomCheck.current = false
+        const roomName = roomNameM[1]
+        const hasA = roomName.toLowerCase().includes(match.playerA.toLowerCase())
+        const hasB = roomName.toLowerCase().includes(match.playerB.toLowerCase())
+        if (!hasA || !hasB) {
+          setLobbyNameMismatch({
+            found: roomName,
+            expected: `${abbreviationRef.current}: ${match.playerA} vs ${match.playerB}`,
+          })
+        }
+      }
+    }
+
     const event = parseBanchoEvent(msg.message, msg.ts, match.playerA, match.playerB)
     if (event) {
       setLiveEvents((prev) => [...prev, event])
@@ -222,10 +243,11 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         setLiveInventory(data)
       }
       if (cfgRes.ok) {
-        const cfg = await cfgRes.json() as { rules?: Record<string, string>; enforceNF?: boolean; banOrder?: string }
+        const cfg = await cfgRes.json() as { rules?: Record<string, string>; enforceNF?: boolean; banOrder?: string; abbreviation?: string }
         if (cfg.rules) setMatchRules(cfg.rules)
         if (typeof cfg.enforceNF === "boolean") setEnforceNF(cfg.enforceNF)
         if (cfg.banOrder) setBanOrder(cfg.banOrder)
+        if (cfg.abbreviation) abbreviationRef.current = cfg.abbreviation
       }
       if (stateRes.ok) {
         const data = await stateRes.json() as { state?: MatchFlowState }
@@ -683,8 +705,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           })}
           onCreateLobby={() => void createLobby()}
           onJoinLobby={(mpId) => {
-            setLiveLobbyUrl(`https://osu.ppy.sh/mp/${mpId}`)
+            const url = `https://osu.ppy.sh/mp/${mpId}`
+            const channel = `#mp_${mpId}`
+            setLiveLobbyUrl(url)
             setFlowState((prev) => prev && prev.phase === "lobby" ? { ...prev, phase: "roll", updatedAt: new Date().toISOString() } : prev)
+            if (!testMode) {
+              pendingRoomCheck.current = true
+              setTimeout(() => void sendIrc(channel, "!mp settings"), 1500)
+            }
             void fetch(`/api/match/${match.id}/join-lobby`, {
               method: "POST",
               credentials: "include",
@@ -694,12 +722,20 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
               if (!res.ok) return
               const data = await res.json() as { alive?: boolean }
               if (!data.alive) {
+                pendingRoomCheck.current = false
                 toast.error("Lobby not found", {
                   description: `#mp_${mpId} did not respond. Check the ID or create a new lobby.`,
                 })
               }
             })
           }}
+          onRetryJoin={() => {
+            setLobbyNameMismatch(null)
+            setLiveLobbyUrl(undefined)
+            setFlowState((prev) => prev ? { ...prev, phase: "lobby", updatedAt: new Date().toISOString() } : prev)
+          }}
+          onClearLobbyMismatch={() => setLobbyNameMismatch(null)}
+          lobbyNameMismatch={lobbyNameMismatch ?? undefined}
           onCloseLobby={() => void closeLobby()}
           onPostResult={postMatchResult}
           onSendReminder={() => void fetch(`/api/match/${match.id}/remind`, { method: "POST", credentials: "include" })}

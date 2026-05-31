@@ -44,9 +44,9 @@ function SkeletonRows() {
     <>
       {Array.from({ length: 12 }).map((_, i) => (
         <tr key={i} className="border-b border-border/40">
-          <td className="px-3 py-2.5"><Skeleton className="h-3 w-8" /></td>
-          <td className="px-3 py-2.5"><Skeleton className="h-3" style={{ width: `${45 + (i % 5) * 10}%` }} /></td>
-          <td className="px-3 py-2.5"><Skeleton className="h-3 w-16" /></td>
+          <td className="px-3 py-2"><Skeleton className="h-3 w-8" /></td>
+          <td className="max-w-0 px-3 py-2"><Skeleton className="h-3 w-full" /></td>
+          <td className="px-3 py-2"><Skeleton className="h-3 w-16" /></td>
         </tr>
       ))}
     </>
@@ -77,12 +77,12 @@ export function MappoolTable({ mappool, playerA, playerB, onRowClick }: Props) {
 
       {/* Map rows */}
       <div className="flex-1 overflow-y-auto">
-        <table className="w-full border-collapse text-sm">
+        <table className="w-full table-fixed border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-card/90 backdrop-blur-sm">
             <tr className="border-b border-border">
-              <th className="w-14 px-3 py-2 text-left font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Slot</th>
+              <th className="w-[52px] px-3 py-2 text-left font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Slot</th>
               <th className="px-3 py-2 text-left font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Map</th>
-              <th className="w-36 px-3 py-2 text-left font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Status</th>
+              <th className="w-[112px] px-3 py-2 text-left font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -95,15 +95,20 @@ export function MappoolTable({ mappool, playerA, playerB, onRowClick }: Props) {
                 onClick={() => onRowClick?.(map)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onRowClick?.(map) }}
               >
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-2">
                   <span className="font-heading text-sm font-bold" style={{ color: (poolConfig(map.pool) ?? poolConfig("NM"))?.hex ?? "#957259" }}>
                     {map.slot}
                   </span>
                 </td>
-                <td className="px-3 py-2.5">
-                  <span className={map.status === "banned" ? "line-through opacity-60" : ""}>{map.map}</span>
+                <td className="max-w-0 px-3 py-2">
+                  <span
+                    className={`block truncate ${map.status === "banned" ? "line-through opacity-60" : ""}`}
+                    title={map.map}
+                  >
+                    {map.map}
+                  </span>
                 </td>
-                <td className="px-3 py-2.5">{statusBadge(map, playerA, playerB)}</td>
+                <td className="px-3 py-2">{statusBadge(map, playerA, playerB)}</td>
               </tr>
             ))}
           </tbody>
