@@ -1,9 +1,9 @@
-export type Pool = "NM" | "HD" | "HR" | "DT" | "FM" | "TB" | "PS"
+export type Pool = "NM" | "PS" | "HR" | "DT" | "FM" | "TB"
 export type MapStatus = "available" | "picked" | "banned" | "protected" | "in-progress" | "completed"
 export type MatchStatus = "scheduled" | "upcoming" | "live" | "completed" | "forfeit"
 export type IngKey = "egg" | "sugar" | "butter" | "flour" | "milk"
 export type Inventory = Record<IngKey, number>
-export type HomeMod = "NM" | "HD" | "HR" | "DT" | "FM"
+export type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
 export type MatchFlowPhase =
   | "lobby"
   | "roll"

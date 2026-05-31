@@ -10,7 +10,7 @@ export const RECIPES: Recipe[] = [
   { id:  7, name: "Banana Bread",  desc: "Play map twice, higher top score wins.",                           cost: { egg: 4, sugar: 1, milk: 1 },              timing: "Before map"  },
   { id:  9, name: "Beignets",      desc: "Ban one additional map.",                                          cost: { egg: 2, sugar: 1, butter: 1, flour: 1, milk: 1 }, timing: "Ban phase" },
   { id: 10, name: "3 Tier Cake",   desc: "+200,000 score.",                                                   cost: { egg: 1, sugar: 1, butter: 2, flour: 1, milk: 1 }, timing: "After score" },
-  { id: 11, name: "Quiche",        desc: "Force HD on both players for one map.",                            cost: { egg: 3 },                                 timing: "Before map"  },
+  { id: 11, name: "Quiche",        desc: "Force PS on both players for one map.",                            cost: { egg: 3 },                                 timing: "Before map"  },
   { id: 13, name: "Pancakes",      desc: "1.1× scoring for one map.",                                       cost: { flour: 2, milk: 1 },                      timing: "Before map"  },
   { id: 14, name: "Brown Butter",  desc: "Force HR on both players for one map.",                            cost: { butter: 3 },                              timing: "Before map"  },
   { id: 15, name: "Omelette",      desc: "Steal one ingredient from opponent.",                              cost: { egg: 1, butter: 1 },                      timing: "Any"         },

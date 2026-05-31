@@ -34,12 +34,12 @@ function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
 
 function IngredientBar({ inv }: { inv: Inventory }) {
   return (
-    <div className="grid grid-cols-5 gap-2 pt-1">
+    <div className="flex flex-col gap-1 pt-1">
       {INGREDIENTS.map(({ key, name, hex, icon }) => (
-        <div key={key} className="flex flex-col items-center gap-0.5">
-          <img src={`/assets/Ingredients/${icon}.png`} alt={name} className="h-5 w-5 object-contain select-none" draggable={false} />
-          <span className="text-[10px] text-muted-foreground">{name}</span>
-          <span className="font-mono text-[10px] font-semibold tabular-nums" style={{ color: hex }}>x{inv[key]}</span>
+        <div key={key} className="flex items-center gap-2">
+          <img src={`/assets/Ingredients/${icon}.png`} alt={name} className="h-7 w-7 flex-shrink-0 object-contain select-none" draggable={false} />
+          <span className="flex-1 text-xs text-muted-foreground">{name}</span>
+          <span className="font-mono text-xs font-semibold tabular-nums" style={{ color: hex }}>x{inv[key]}</span>
         </div>
       ))}
     </div>
@@ -106,6 +106,12 @@ function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label:
   )
 }
 
+interface UsedRecipeEntry {
+  id: string
+  player: string
+  recipeId: number
+}
+
 interface Props {
   invA: Inventory
   invB: Inventory
@@ -113,14 +119,51 @@ interface Props {
   labelB: string
   phase?: MatchFlowPhase
   onUseRecipe?: (player: string, recipeId: number) => void
+  usedRecipes?: UsedRecipeEntry[]
+  onUndoRecipe?: (id: string) => void
 }
 
-export function RecipePanel({ invA, invB, labelA, labelB, phase, onUseRecipe }: Props) {
+function ActiveRecipes({ entries, onUndo }: { entries: UsedRecipeEntry[]; onUndo?: (id: string) => void }) {
+  if (entries.length === 0) return null
+  return (
+    <div className="space-y-1.5">
+      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Active</p>
+      {entries.map((entry) => {
+        const recipe = RECIPES.find((r) => r.id === entry.recipeId)
+        if (!recipe) return null
+        return (
+          <div key={entry.id} className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+            <div>
+              <p className="text-xs font-medium">{recipe.name}</p>
+              <p className="text-[10px] text-muted-foreground">{recipe.desc}</p>
+            </div>
+            <button
+              className="flex-shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-destructive/60 hover:text-destructive"
+              onClick={() => onUndo?.(entry.id)}
+            >
+              Undo
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+export function RecipePanel({ invA, invB, labelA, labelB, phase, onUseRecipe, usedRecipes = [], onUndoRecipe }: Props) {
+  const usedA = usedRecipes.filter((r) => r.player === labelA)
+  const usedB = usedRecipes.filter((r) => r.player === labelB)
   return (
     <div className="space-y-6">
-      <RecipeList inv={invA} label={labelA} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelA, recipeId)} />
+      <div className="space-y-3">
+        <ActiveRecipes entries={usedA} onUndo={onUndoRecipe} />
+        <RecipeList inv={invA} label={labelA} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelA, recipeId)} />
+      </div>
       <Separator />
-      <RecipeList inv={invB} label={labelB} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelB, recipeId)} />
+      <div className="space-y-3">
+        <ActiveRecipes entries={usedB} onUndo={onUndoRecipe} />
+        <RecipeList inv={invB} label={labelB} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelB, recipeId)} />
+      </div>
     </div>
   )
 }

@@ -17,6 +17,13 @@ import { PlayerColumn } from "./PlayerColumn"
 import { RecipePanel } from "./RecipePanel"
 import { TestSimPanel } from "./TestSimPanel"
 
+interface UsedRecipe {
+  id: string
+  player: string
+  recipeId: number
+  snapshot: Inventory
+}
+
 type EventKind = "join" | "leave" | "roll" | "abort" | "other_join" | "other_roll" | "info"
 
 interface MatchEvent {
@@ -151,6 +158,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [manualMapActions, setManualMapActions] = useState(true)
   const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
   const [testResultUnlocked, setTestResultUnlocked] = useState(false)
+  const [usedRecipes, setUsedRecipes] = useState<UsedRecipe[]>([])
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
   const ircRef = useRef<IrcChatHandle>(null)
@@ -429,6 +437,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       nextInv[key] = Math.max(0, nextInv[key] - amount)
     }
     setLiveInventory((prev) => prev ? { ...prev, [side]: nextInv } : prev)
+    const usedId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setUsedRecipes((prev) => [...prev, { id: usedId, player, recipeId, snapshot: currentInv }])
 
     if (testMode) {
       toast.success(`${recipe.name} crafted`)
@@ -452,6 +462,27 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       if (savedInventory) setLiveInventory((prev) => prev ? { ...prev, [side]: savedInventory } : prev)
       toast.success(`${recipe.name} crafted`)
     })
+  }
+
+  function handleUndoRecipe(id: string) {
+    const entry = usedRecipes.find((r) => r.id === id)
+    if (!entry || !liveInventory) return
+    const side = entry.player.toLowerCase() === match.playerA.toLowerCase() ? "a" : "b"
+    setLiveInventory((prev) => prev ? { ...prev, [side]: entry.snapshot } : prev)
+    setUsedRecipes((prev) => prev.filter((r) => r.id !== id))
+  }
+
+  function clearHomeMod(player: string) {
+    const current = flowState ?? defaultFlowState(match, liveLobbyUrl)
+    const isA = player.toLowerCase() === match.playerA.toLowerCase()
+    const next: MatchFlowState = {
+      ...current,
+      ...(isA ? { homeModA: undefined } : { homeModB: undefined }),
+      phase: "home_mod",
+      turnPlayer: player,
+      updatedAt: new Date().toISOString(),
+    }
+    void postStateAction({ action: "set_home_mod", player, homeMod: null }, next)
   }
 
   function postMatchResult() {
@@ -493,7 +524,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   function getPickMods(pool: string, nf: boolean): string {
     const p = pool.toUpperCase()
     if (p === "FM" || p === "TB") return "Freemod"
-    if (p === "HD") return nf ? "HDNF" : "HD"
+    if (p === "PS") return nf ? "PSNF" : "None"
     if (p === "HR") return nf ? "HRNF" : "HR"
     if (p === "DT") return nf ? "DTNF" : "DT"
     return nf ? "NF" : "None"
@@ -689,11 +720,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           homeModB={flowState?.homeModB}
           homeModTurnPlayer={flowState?.phase === "home_mod" ? flowState.turnPlayer : undefined}
           onHomeModSelect={setHomeMod}
+          onClearHomeMod={clearHomeMod}
           matchStatus={liveMatchStatus}
           hasLobby={liveLobbyUrl !== undefined}
           isDemo={isDemo}
           postResultReady={flowState?.phase === "ready_result"}
           testResultUnlocked={testResultUnlocked}
+          onScoreAEdit={(val) => setLiveScoreA(val)}
+          onScoreBEdit={(val) => setLiveScoreB(val)}
         />
 
         <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
@@ -727,6 +761,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 labelB={match.playerB}
                 phase={flowState?.phase}
                 onUseRecipe={handleRecipeUse}
+                usedRecipes={usedRecipes}
+                onUndoRecipe={handleUndoRecipe}
               />
             </TabsContent>
 

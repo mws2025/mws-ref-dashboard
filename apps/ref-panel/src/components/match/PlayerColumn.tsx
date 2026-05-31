@@ -23,48 +23,58 @@ function WinBoxes({ score, needed }: { score: number; needed: number }) {
 }
 
 function IngredientBar({ inv, editing, onChange, onToggleEdit }: { inv: Inventory; editing?: boolean; onChange?: (key: IngKey, delta: number) => void; onToggleEdit?: () => void }) {
+  const [open, setOpen] = useState(false)
   return (
     <div className="mt-2 rounded-md border border-border/60 bg-muted/30 px-2 py-2">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Ingredients</span>
+      <div className={`flex items-center justify-between ${open ? "mb-2" : ""}`}>
         <button
-          className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          onClick={onToggleEdit}
+          className="flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen((v) => !v)}
         >
-          {editing ? <><Check className="h-2.5 w-2.5" /> Done</> : <><Pencil className="h-2.5 w-2.5" /> Edit</>}
+          <span>{open ? "▾" : "▸"}</span>
+          <span>Ingredients</span>
         </button>
+        {open && (
+          <button
+            className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={onToggleEdit}
+          >
+            {editing ? <><Check className="h-2.5 w-2.5" /> Done</> : <><Pencil className="h-2.5 w-2.5" /> Edit</>}
+          </button>
+        )}
       </div>
-      <div className="grid grid-cols-5 gap-1">
+      {open && <div className="flex flex-col gap-1">
         {INGREDIENTS.map(({ key, name, hex, icon }) => (
-          <div key={key} className="flex flex-col items-center gap-0.5">
+          <div key={key} className="flex items-center gap-2">
             <img
               src={`/assets/Ingredients/${icon}.png`}
               alt={name}
-              className="h-6 w-6 object-contain select-none"
+              className="h-7 w-7 flex-shrink-0 object-contain select-none"
               draggable={false}
             />
+            <span className="flex-1 text-xs text-muted-foreground">{name}</span>
             {editing ? (
-              <div className="flex w-full flex-col items-center">
+              <div className="flex items-center gap-1">
                 <button
-                  className="flex h-4 w-full items-center justify-center rounded text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => onChange?.(key, +1)}
-                >+</button>
-                <span className="font-mono text-xs font-bold tabular-nums leading-none" style={{ color: hex }}>
+                  className="flex h-5 w-5 items-center justify-center rounded text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => onChange?.(key, -1)}
+                >-</button>
+                <span className="font-mono text-xs font-bold tabular-nums w-5 text-center" style={{ color: hex }}>
                   {inv[key] ?? 0}
                 </span>
                 <button
-                  className="flex h-4 w-full items-center justify-center rounded text-[11px] leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => onChange?.(key, -1)}
-                >-</button>
+                  className="flex h-5 w-5 items-center justify-center rounded text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  onClick={() => onChange?.(key, +1)}
+                >+</button>
               </div>
             ) : (
-              <span className="font-mono text-[10px] font-semibold tabular-nums" style={{ color: hex }}>
+              <span className="font-mono text-xs font-semibold tabular-nums" style={{ color: hex }}>
                 x{inv[key] ?? 0}
               </span>
             )}
           </div>
         ))}
-      </div>
+      </div>}
     </div>
   )
 }
@@ -73,16 +83,28 @@ function HomeModControl({
   value,
   canChoose,
   onSelect,
+  onClear,
 }: {
   value?: HomeMod
   canChoose?: boolean
   onSelect?: (homeMod: HomeMod) => void
+  onClear?: () => void
 }) {
   return (
     <div className="mt-2 rounded-md border border-border/60 bg-card/35 px-2 py-2">
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Home mod</span>
-        <span className="font-mono text-[10px] font-semibold text-foreground">{value ?? "Unset"}</span>
+        <div className="flex items-center gap-1">
+          <span className="font-mono text-[10px] font-semibold text-foreground">{value ?? "Unset"}</span>
+          {value && onClear && (
+            <button
+              type="button"
+              className="flex h-3.5 w-3.5 items-center justify-center rounded text-[10px] text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+              onClick={onClear}
+              title="Undo home mod"
+            >×</button>
+          )}
+        </div>
       </div>
       {canChoose && (
         <div className="grid grid-cols-5 gap-1">
@@ -134,6 +156,9 @@ interface Props {
   homeModB?: HomeMod
   homeModTurnPlayer?: string
   onHomeModSelect?: (player: string, homeMod: HomeMod) => void
+  onClearHomeMod?: (player: string) => void
+  onScoreAEdit?: (val: number) => void
+  onScoreBEdit?: (val: number) => void
   matchStatus?: MatchStatus
   hasLobby?: boolean
   isDemo?: boolean
@@ -154,7 +179,8 @@ export function PlayerColumn({
   round, refName, streamer,
   onInvAChange, onInvBChange,
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit,
-  homeModA, homeModB, homeModTurnPlayer, onHomeModSelect,
+  homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
+  onScoreAEdit, onScoreBEdit,
   matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
   const winsNeeded = Math.ceil(bestOf / 2)
@@ -186,16 +212,31 @@ export function PlayerColumn({
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto">
         {/* Player A */}
-        <div className="space-y-2 border-b border-border px-4 pb-4 pt-5">
+        <div className="space-y-2 border-b border-border px-4 pb-4 pt-4">
           <div className="flex min-h-9 items-start justify-between gap-2">
             <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerA}</span>
-            {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none">{scoreA}</span>}
+            {invLoading ? <Skeleton className="h-7 w-8" /> : (
+              <div className="flex items-center gap-1">
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  disabled={isDemo || scoreA <= 0}
+                  onClick={() => onScoreAEdit?.(scoreA - 1)}
+                >−</button>
+                <span className="w-6 text-center font-heading text-3xl leading-none tabular-nums">{scoreA}</span>
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  disabled={isDemo}
+                  onClick={() => onScoreAEdit?.(scoreA + 1)}
+                >+</button>
+              </div>
+            )}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreA} needed={winsNeeded} />}
           <HomeModControl
             value={homeModA}
             canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerA.toLowerCase()}
             onSelect={(homeMod) => onHomeModSelect?.(playerA, homeMod)}
+            onClear={!isDemo && homeModA ? () => onClearHomeMod?.(playerA) : undefined}
           />
           {invLoading
             ? <Skeleton className="h-14 w-full mt-2" />
@@ -203,21 +244,32 @@ export function PlayerColumn({
           }
         </div>
 
-        <div className="flex items-center justify-center py-2">
-          <span className="font-accent text-sm text-muted-foreground">vs</span>
-        </div>
-
         {/* Player B */}
-        <div className="space-y-2 border-b border-border px-4 pb-4 pt-5">
+        <div className="space-y-2 border-b border-border px-4 pb-4 pt-4">
           <div className="flex min-h-9 items-start justify-between gap-2">
             <span className="min-w-0 break-words pt-1 font-heading text-sm font-semibold leading-tight">{playerB}</span>
-            {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none">{scoreB}</span>}
+            {invLoading ? <Skeleton className="h-7 w-8" /> : (
+              <div className="flex items-center gap-1">
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  disabled={isDemo || scoreB <= 0}
+                  onClick={() => onScoreBEdit?.(scoreB - 1)}
+                >−</button>
+                <span className="w-6 text-center font-heading text-3xl leading-none tabular-nums">{scoreB}</span>
+                <button
+                  className="flex h-5 w-5 items-center justify-center rounded border border-border/60 text-xs text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
+                  disabled={isDemo}
+                  onClick={() => onScoreBEdit?.(scoreB + 1)}
+                >+</button>
+              </div>
+            )}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : <WinBoxes score={scoreB} needed={winsNeeded} />}
           <HomeModControl
             value={homeModB}
             canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerB.toLowerCase()}
             onSelect={(homeMod) => onHomeModSelect?.(playerB, homeMod)}
+            onClear={!isDemo && homeModB ? () => onClearHomeMod?.(playerB) : undefined}
           />
           {invLoading
             ? <Skeleton className="h-14 w-full mt-2" />
