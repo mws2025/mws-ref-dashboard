@@ -1,13 +1,11 @@
 import type { Metadata } from "next"
-import { Josefin_Sans, Geist } from "next/font/google"
+import { Josefin_Sans } from "next/font/google"
 import localFont from "next/font/local"
 import "./globals.css"
-import { cn } from "@/lib/utils";
-
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+import { cn } from "@/lib/utils"
 
 const josefinSans = Josefin_Sans({
-  variable: "--font-josefin-sans",
+  variable: "--font-sans",
   subsets: ["latin"],
 })
 
@@ -30,7 +28,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={cn("h-full", "antialiased", josefinSans.variable, domusTitling.variable, "font-sans", geist.variable)}
+      className={cn(
+        "h-full",
+        "antialiased",
+        josefinSans.variable,
+        domusTitling.variable
+      )}
     >
       <body className="flex min-h-full flex-col">{children}</body>
     </html>
