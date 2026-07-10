@@ -97,6 +97,8 @@ Required in `.env.local`:
 | `OSU_CLIENT_ID` | osu! OAuth client ID |
 | `OSU_CLIENT_SECRET` | osu! OAuth client secret |
 | `OSU_REDIRECT_URI` | Exact osu! callback URL, local default is `http://localhost:8788/auth/callback` |
+| `OSU_PROXY_BASE` | Optional osu! API proxy base URL |
+| `OSU_PROXY_SECRET` | Secret sent to the osu! API proxy as `X-Proxy-Secret` |
 | `SESSION_SECRET` | Session JWT signing secret |
 | `IRC_BOT_USERNAME` | osu! IRC bot username |
 | `IRC_BOT_PASSWORD` | osu! IRC password |

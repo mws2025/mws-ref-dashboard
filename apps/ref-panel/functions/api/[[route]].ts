@@ -11,6 +11,7 @@ type Bindings = {
   OSU_REDIRECT_URI?: string
   SESSION_SECRET?: string
   OSU_PROXY_BASE?: string
+  OSU_PROXY_SECRET?: string
   IRC_RELAY_URL?: string
   IRC_RELAY_SECRET?: string
 }
@@ -107,6 +108,20 @@ const OSU_AUTH_BASE = "https://osu.ppy.sh"
 
 function osuApiBase(env: Bindings): string {
   return env.OSU_PROXY_BASE?.trim() || OSU_AUTH_BASE
+}
+
+function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  const proxySecret = env.OSU_PROXY_SECRET?.trim()
+
+  if (env.OSU_PROXY_BASE?.trim() && proxySecret) {
+    headers.set("X-Proxy-Secret", proxySecret)
+  }
+
+  return fetch(`${osuApiBase(env)}${path}`, {
+    ...init,
+    headers,
+  })
 }
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
@@ -604,7 +619,7 @@ async function exchangeOsuCodeForToken(
     redirect_uri: redirectUri,
   })
 
-  const tokenRes = await fetch(`${osuApiBase(env)}/oauth/token`, {
+  const tokenRes = await fetchOsu(env, "/oauth/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -631,7 +646,7 @@ async function exchangeOsuCodeForToken(
 }
 
 async function fetchOsuUser(accessToken: string, env: Bindings): Promise<OsuUser> {
-  const userRes = await fetch(`${osuApiBase(env)}/api/v2/me/osu`, {
+  const userRes = await fetchOsu(env, "/api/v2/me/osu", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -1227,6 +1242,8 @@ app.get("/api/auth/debug", (c) => {
     osuRedirectUri: c.env.OSU_REDIRECT_URI?.trim() ?? null,
     hasOsuClientSecret: clientSecret.length > 0,
     osuClientSecretLength: clientSecret.length,
+    hasOsuProxyBase: Boolean(c.env.OSU_PROXY_BASE?.trim()),
+    hasOsuProxySecret: Boolean(c.env.OSU_PROXY_SECRET?.trim()),
     hasSessionSecret: Boolean(c.env.SESSION_SECRET?.trim()),
     hasGoogleSheetId: Boolean(c.env.GOOGLE_SHEETS_TOURNAMENT_ID?.trim()),
     googleCredentialsMode: googleCredentials.startsWith("{") ? "json" : "path",
@@ -1269,7 +1286,7 @@ app.get("/api/auth/osu/preflight", async (c) => {
       scope: "public",
     })
 
-    const tokenRes = await fetch(`${osuApiBase(c.env)}/oauth/token`, {
+    const tokenRes = await fetchOsu(c.env, "/oauth/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -1800,7 +1817,7 @@ async function buildAndPostResultEmbed(
       const clientId     = env.OSU_CLIENT_ID?.trim()
       const clientSecret = env.OSU_CLIENT_SECRET?.trim()
       if (clientId && clientSecret) {
-        const tokenRes = await fetch(`${osuApiBase(env)}/oauth/token`, {
+        const tokenRes = await fetchOsu(env, "/oauth/token", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
           body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: "client_credentials", scope: "public" }),
@@ -1809,7 +1826,7 @@ async function buildAndPostResultEmbed(
           const tokenJson = await tokenRes.json() as { access_token?: string }
           const token = tokenJson.access_token
           if (token) {
-            const mpRes = await fetch(`${osuApiBase(env)}/api/v2/matches/${mpId}`, {
+            const mpRes = await fetchOsu(env, `/api/v2/matches/${mpId}`, {
               headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
             })
             if (mpRes.ok) {
