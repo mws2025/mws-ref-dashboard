@@ -5,60 +5,78 @@ import {
   NavigationMenuLink,
   NavigationMenuList,
 } from "@/components/ui/navigation-menu"
-import { ButtonLink } from "@/components/ui/button"
 import Link from "next/link"
 import Image from "next/image"
+import { navigationLinks, externalLinks } from "./nav-links"
+import { MobileNav } from "./MobileNav"
 
 type NavbarProps = {
   className?: string
 }
 
-export const navigationLinks = [
-  { href: "/about", label: "About" },
-  { href: "/staff", label: "Staff" },
-  { href: "/players", label: "Players" },
-  { href: "/gimmick", label: "Gimmick" },
-  { href: "/mappool", label: "Mappool" },
-  { href: "/schedule", label: "Schedule" },
-]
-
 export function Navbar({ className }: NavbarProps) {
   return (
-    <div
+    <header
       className={cn(
-        "bg-caramel z-1 flex h-16 w-full items-center justify-between px-4 py-8 sm:px-6 lg:px-8",
+        "bg-caramel font-domus relative z-50 flex h-16 w-full items-center justify-between px-4 py-8 sm:px-6 lg:px-8",
         className
       )}
     >
       {/* logo */}
-      <Link href="/">
+      <Link href="/" className="transition-opacity hover:opacity-80">
         <Image
-          src="/logo-light.png"
+          src="/logo-light.webp"
           alt="Whisked Logo"
           width={4096}
           height={1051}
           className="h-11 w-auto"
+          loading="eager"
         />
       </Link>
 
-      {/* links */}
-      <div className="flex items-center justify-between gap-x-6">
+      {/* mobile: dropdown menu */}
+      <MobileNav />
+
+      {/* desktop: inline links */}
+      <div className="hidden items-center justify-between gap-x-6 md:flex">
         <NavigationMenu className="text-cream">
           <NavigationMenuList>
             {navigationLinks.map(({ href, label }) => (
-              <NavigationMenuItem
-                key={href}
-                className="hover:text-espresso/50 transition-colors"
-              >
-                <NavigationMenuLink href={href}>{label}</NavigationMenuLink>
+              <NavigationMenuItem key={href}>
+                <NavigationMenuLink
+                  href={href}
+                  className="text-cream hover:text-strawberry pt-1 hover:opacity-100"
+                >
+                  {label}
+                </NavigationMenuLink>
               </NavigationMenuItem>
             ))}
           </NavigationMenuList>
         </NavigationMenu>
 
-        {/* ref button - conditionally visible for logged-in referees */}
-        <ButtonLink href="#">Referee Portal</ButtonLink>
+        {/* external links (osu!, Challonge, Sheets, Twitch) */}
+        <div className="flex items-center gap-1">
+          {externalLinks.map(({ href, label, icon }) => (
+            <Link
+              key={label}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={label}
+              className="focus-visible:ring-ring/50 flex size-9 items-center justify-center rounded-full transition-transform duration-150 hover:scale-110 hover:opacity-80 focus-visible:ring-3 focus-visible:outline-none"
+            >
+              <Image
+                src={icon}
+                alt=""
+                width={48}
+                height={48}
+                className="size-12 h-auto w-auto"
+                loading="eager"
+              />
+            </Link>
+          ))}
+        </div>
       </div>
-    </div>
+    </header>
   )
 }

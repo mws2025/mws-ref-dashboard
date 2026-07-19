@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils"
 import Link from "next/link"
 import Image from "next/image"
-import { navigationLinks } from "./Navbar"
+import { externalLinks } from "./nav-links"
 import { Heading } from "./ui/heading"
 
 type FooterProps = {
@@ -17,7 +17,7 @@ export function Footer({ className }: FooterProps) {
     <footer>
       <div
         className={cn(
-          "bg-foam text-espresso flex flex-row items-stretch justify-between gap-x-16 px-6 py-12 text-base",
+          "bg-foam text-espresso flex flex-col items-stretch justify-between gap-y-10 px-6 py-12 text-base sm:flex-row sm:gap-x-16 sm:gap-y-0",
           className
         )}
       >
@@ -25,10 +25,13 @@ export function Footer({ className }: FooterProps) {
           <Heading as="h3" size="sub">
             Let&apos;s bake something unforgettable together!
           </Heading>
-          <Link href="/">
+          <Link
+            href="/"
+            className="w-[90%] transition-opacity hover:opacity-80"
+          >
             <Image
-              className="w-[90%]"
-              src="/logo-dark.png"
+              className="w-full"
+              src="/logo-dark.webp"
               alt="whisked logo"
               width={4096}
               height={1051}
@@ -36,22 +39,30 @@ export function Footer({ className }: FooterProps) {
           </Link>
         </div>
 
-        <div className="flex max-w-100 flex-col items-end gap-y-6">
-          <div className="flex gap-x-6">
-            {navigationLinks.map(({ href, label }) => (
+        <div className="order-first flex max-w-100 flex-col items-start gap-y-6 sm:order-none sm:items-end">
+          <div className="flex gap-x-2">
+            {externalLinks.map(({ href, label, iconDark }) => (
               <Link
-                key={href}
+                key={label}
                 href={href}
-                className="bg-cream h-8 w-8"
-                // className="hover:text-espresso/50 text-lg transition-colors"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={label}
+                className="focus-visible:ring-ring/50 flex size-14 items-center justify-center rounded-full transition-transform duration-150 hover:scale-110 hover:opacity-80 focus-visible:ring-3 focus-visible:outline-none"
               >
-                <span className="hidden">{label}</span>
+                <Image
+                  src={iconDark}
+                  alt=""
+                  width={74}
+                  height={74}
+                  className="size-18.5 h-auto w-auto"
+                />
               </Link>
             ))}
           </div>
           <Image
-            className="-mb-30 w-[80%] rotate-y-180"
-            src="/CaeliaSketch.png"
+            className="hidden w-[80%] rotate-y-180 sm:-mb-30 sm:block"
+            src="/CaeliaSketch.webp"
             alt=""
             width={887}
             height={735}

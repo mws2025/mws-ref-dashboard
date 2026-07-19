@@ -2,31 +2,53 @@ import { ButtonLink } from "@/components/ui/button"
 import { Heading } from "@/components/ui/heading"
 import { Section } from "@/components/Section"
 import { Container } from "@/components/Container"
-import { Navbar } from "@/components/Navbar"
-import { Footer } from "@/components/Footer"
 import Image from "next/image"
 import { InfoCard } from "./components/InfoCard"
+import { SponsorRow } from "./components/SponsorRow"
+import Link from "next/link"
 
 export default function Home() {
-  const eyebrow =
-    "text-strawberry text-sm font-semibold tracking-[0.2em] uppercase"
-
   return (
-    <>
-      <Navbar />
-
+    <main className="">
       {/* Hero */}
       <Section
-        className="relative h-[50vh] bg-[url(/illustration.png)] bg-cover bg-center"
-        spacing="x"
+        className="relative h-[75vh] bg-[url(/illustration.webp)] bg-cover bg-center sm:h-[50vh]"
+        spacing="none"
       >
         <div className="bg-grad-cappuccino absolute inset-0 opacity-52"></div>
         <Container className="relative h-full">
-          <div className="absolute bottom-0 left-1/2 z-10 w-[60%] -translate-x-1/2 translate-y-1/2">
-            {/* peeking buttons */}
-            <div className="absolute top-0 right-6 z-0 flex -translate-y-3/4 gap-2">
+          {/* mobile: normal stacked buttons above the island, image still
+              visible around them. Desktop keeps the peeking row instead. */}
+          <div className="absolute inset-x-4 bottom-22 z-10 flex flex-col gap-2 sm:hidden">
+            <ButtonLink
+              href="https://docs.google.com/forms/d/e/1FAIpQLSc7A0XAzS_u9ithwfAnwSBCuNPSHciijE7R-ssG_kRMdYEmSA/viewform"
+              variant="blank"
+              className="bg-strawberry text-cream hover:bg-strawberry/60 w-full justify-center"
+            >
+              Player Registration
+            </ButtonLink>
+            <ButtonLink
+              href="https://docs.google.com/forms/d/e/1FAIpQLSfHZhW7tVeeqVseH5JhH2k2s4Lq7lXZr-0Nz6aKIqr85n6XFg/viewform?usp=header"
+              variant="blank"
+              className="bg-cream border-strawberry text-strawberry hover:bg-cream/90 w-full justify-center"
+            >
+              Staff Registration
+            </ButtonLink>
+            <ButtonLink
+              href="https://www.twitch.tv/mwstournament"
+              variant="blank"
+              className="bg-cherry hover:bg-cherry/60 text-cream w-full justify-center gap-1.5"
+            >
+              <span className="bg-cream size-2 animate-pulse rounded-full" />
+              Watch Live
+            </ButtonLink>
+          </div>
+
+          <div className="absolute bottom-0 left-1/2 z-10 w-[90%] -translate-x-1/2 translate-y-1/2 sm:w-[60%]">
+            {/* peeking buttons (desktop only) */}
+            <div className="absolute top-0 right-6 z-0 hidden -translate-y-3/4 justify-end gap-2 sm:flex">
               <ButtonLink
-                href="#"
+                href="https://docs.google.com/forms/d/e/1FAIpQLSc7A0XAzS_u9ithwfAnwSBCuNPSHciijE7R-ssG_kRMdYEmSA/viewform"
                 size="peek"
                 variant="blank"
                 className="bg-strawberry text-cream hover:bg-strawberry/60 hover:-translate-y-1"
@@ -34,7 +56,7 @@ export default function Home() {
                 Player Registration
               </ButtonLink>
               <ButtonLink
-                href="#"
+                href="https://docs.google.com/forms/d/e/1FAIpQLSfHZhW7tVeeqVseH5JhH2k2s4Lq7lXZr-0Nz6aKIqr85n6XFg/viewform?usp=header"
                 size="peek"
                 variant="blank"
                 className="bg-cream border-strawberry text-strawberry hover:bg-cream/90 hover:-translate-y-1"
@@ -48,7 +70,7 @@ export default function Home() {
                 className="bg-cherry hover:bg-cherry/60 text-cream gap-1.5 hover:-translate-y-1"
               >
                 <span className="bg-cream size-2 animate-pulse rounded-full" />
-                Live Now
+                Watch Live
               </ButtonLink>
             </div>
 
@@ -57,7 +79,7 @@ export default function Home() {
               <Heading
                 as="h1"
                 size="hero"
-                className="text-espresso text-center"
+                className="text-espresso text-center text-3xl"
               >
                 Welcome to Whisked, MWS&apos;s Third Iteration!
               </Heading>
@@ -67,7 +89,7 @@ export default function Home() {
       </Section>
 
       {/* Info Grid */}
-      <Section className="mt-22">
+      <Section className="mt-24">
         <Container>
           <div className="mb-8 text-center">
             <Heading
@@ -78,7 +100,8 @@ export default function Home() {
               What&apos;s Baking
             </Heading>
           </div>
-          <div className="grid grid-cols-4 gap-x-8">
+
+          <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4 lg:gap-x-8">
             <InfoCard
               src="/PieSketch.png"
               alt="pie sketch"
@@ -120,19 +143,84 @@ export default function Home() {
               winners.
             </InfoCard>
           </div>
+
+          {/* mobile only: the Book section's rules/menu hotspots below are
+              hidden on mobile, so surface them as real buttons here instead */}
+          <div className="mt-8 mb-8 flex justify-center gap-2 sm:hidden">
+            <ButtonLink
+              href="/about"
+              variant="blank"
+              className="bg-caramel text-cream hover:bg-caramel/80 flex-1 justify-center"
+            >
+              View Rules
+            </ButtonLink>
+            <ButtonLink
+              href="/menu"
+              variant="blank"
+              className="bg-cream border-caramel text-caramel hover:bg-cream/90 flex-1 justify-center"
+            >
+              View Menu
+            </ButtonLink>
+          </div>
         </Container>
       </Section>
 
-      {/* Book */}
-      <Section className="relative mt-39" background="foam" spacing="x">
+      {/* Book — hidden on mobile for now */}
+      <Section
+        className="relative mt-40 hidden sm:block"
+        background="foam"
+        spacing="none"
+      >
         {/* TODO: translate book image to jsx */}
-        <Image
-          src="/Book.png"
-          alt="recipe book"
-          width={2160}
-          height={1210}
-          className="absolute inset-x-0 -top-23 h-auto w-full"
-        ></Image>
+        <div className="absolute inset-x-0 -top-23 h-auto w-full">
+          <Image
+            src="/book.webp"
+            alt="recipe book"
+            width={2160}
+            height={1210}
+            className="h-auto w-full"
+            draggable="false"
+          ></Image>
+          <svg
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            className="absolute top-0 left-0 h-full w-full"
+          >
+            <Link
+              href="https://docs.google.com/document/d/1yZUfOGIjgmyxufVrqDNi5Fs85XAdAuNw1lwaIWuEGhU/edit?tab=t.0#heading=h.myjk5m6lzhvh"
+              target="_blank"
+            >
+              <rect
+                x="36.6"
+                y="78.6"
+                width="9.76"
+                height="3.1"
+                transform="rotate(-2.33, 38.33, 81.43)"
+                fill="transparent"
+                pointerEvents={"auto"}
+                stroke="none"
+                style={{
+                  transformOrigin: "38.33% 81.43%",
+                }}
+              />
+            </Link>
+            <Link href="/menu">
+              <rect
+                x="85.45"
+                y="10.5"
+                width="9.75"
+                height="3.1"
+                transform="rotate(-2.33, 88.74, 15.29)"
+                fill="transparent"
+                pointerEvents={"auto"}
+                stroke="none"
+                style={{
+                  transformOrigin: "88.74% 15.29%",
+                }}
+              />
+            </Link>
+          </svg>
+        </div>
 
         {/* spacer */}
         <div aria-hidden className="aspect-2160/1210 w-full" />
@@ -153,11 +241,11 @@ export default function Home() {
       {/* Sponsors */}
       <Section background="chocolate">
         <Container>
-          <div className="text-cream grid grid-cols-2 gap-x-12">
-            <div>
-              <p className={eyebrow}>Sponsors</p>
-              <Heading as="h3" size="section" className="mt-2">
-                Additional Prizes
+          <div className="text-cream flex flex-col gap-16">
+            {/* intro */}
+            <div className="max-w-2xl">
+              <Heading as="h2" size="section" className="mt-2">
+                Our Sponsors
               </Heading>
               <p className="text-cream/80 mt-2 text-lg">
                 Thank you to our sponsors — we appreciate you and your work.
@@ -176,54 +264,25 @@ export default function Home() {
                 !
               </p>
             </div>
-            <Image
-              src="/screenshot-wishlist-card.png"
-              alt="Whisk game"
-              width={1920}
-              height={1080}
-              className="ml-auto aspect-auto rounded-xl"
-            ></Image>
+
+            <SponsorRow
+              src="/screenshot-wishlist-card.webp"
+              alt="Whisk"
+              title="Whisk"
+              description="Whisk is a two-player platformer about shared movement and communication. Coordinate jumps, climbs and throws with a partner to get every Dreamcat home."
+              href="https://store.steampowered.com/app/3602270/Whisk/"
+            />
+            <SponsorRow
+              reverse
+              src="/PulsarLab_Xpadmini_banner_main_3350x.webp"
+              alt="Pulsar Lab XPAD"
+              title="Pulsar Lab XPAD"
+              description="The smallest pad on your desk. The fastest input in the room. XPAD mini puts flagship-level performance exactly where it belongs next to your mouse, where every millisecond counts."
+              href="https://www.pulsar.gg/products/pulsar-lab-xpad-mini-gaming-key-pad"
+            />
           </div>
         </Container>
       </Section>
-
-      {/* Decor */}
-      <Section spacing="xl">
-        <Container>
-          <div className="grid grid-cols-4 gap-x-8">
-            <Image
-              src="/window 1.png"
-              alt="window"
-              width={319}
-              height={416}
-              className="w-75"
-            ></Image>
-            <Image
-              src="/window 2.png"
-              alt="window"
-              width={319}
-              height={416}
-              className="w-75"
-            ></Image>
-            <Image
-              src="/window 3.png"
-              alt="window"
-              width={319}
-              height={416}
-              className="w-75"
-            ></Image>
-            <Image
-              src="/window 4.png"
-              alt="window"
-              width={319}
-              height={416}
-              className="w-75"
-            ></Image>
-          </div>
-        </Container>
-      </Section>
-
-      <Footer />
-    </>
+    </main>
   )
 }

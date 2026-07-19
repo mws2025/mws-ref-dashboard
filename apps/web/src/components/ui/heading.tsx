@@ -5,9 +5,9 @@ import { cn } from "@/lib/utils"
 const headingVariants = cva("text-balance", {
   variants: {
     size: {
-      display: "text-8xl",
-      hero: "text-6xl",
-      section: "text-4xl",
+      display: "text-5xl sm:text-7xl lg:text-8xl",
+      hero: "text-4xl sm:text-5xl lg:text-6xl",
+      section: "text-3xl sm:text-4xl",
       sub: "text-2xl",
     },
   },

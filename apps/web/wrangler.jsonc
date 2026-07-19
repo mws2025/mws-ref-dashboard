@@ -1,19 +1,23 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "mws-website",
+  "account_id": "f26c7eb5efc8cc2748f5bf1c78f8ac5c",
   "main": ".open-next/worker.js",
-  "compatibility_date": "2025-05-26",
+  "compatibility_date": "2026-07-05",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "binding": "ASSETS",
     "directory": ".open-next/assets",
   },
-  // TODO: create kv namespace
-  // bunx wrangler kv namespace create NEXT_INC_CACHE_KV
   "kv_namespaces": [
-    { "binding": "NEXT_INC_CACHE_KV", "id": "<created via wrangler>" },
+    {
+      "binding": "NEXT_INC_CACHE_KV",
+      "id": "64680d58691b49dbbfe17af76ba574a9",
+    },
   ],
   "services": [
+    // required by open-next.config.ts's memory-queue (ISR background revalidation)
+    { "binding": "WORKER_SELF_REFERENCE", "service": "mws-website" },
     // wire this once apps/api-proxy is deployed
     // { "binding": "API", "service": "mws-api-proxy" }
   ],

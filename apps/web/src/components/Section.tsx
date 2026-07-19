@@ -10,11 +10,11 @@ const sectionVariants = cva("w-full", {
       transparent: "",
     },
     spacing: {
-      x: "py-0",
+      none: "py-0",
       sm: "py-4",
       md: "py-8",
-      lg: "py-16",
-      xl: "py-24",
+      lg: "pt-16 pb-30",
+      xl: "py-24 pb-30",
     },
   },
   defaultVariants: {

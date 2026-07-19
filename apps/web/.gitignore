@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# opennextjs/cloudflare build output
+/.open-next/
+
 # production
 /build
 
@@ -32,6 +35,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+
+# cloudflare local secrets (keep the .example tracked)
+.dev.vars
+!.dev.vars.example
 
 # vercel
 .vercel

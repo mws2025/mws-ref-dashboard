@@ -29,12 +29,14 @@ export default function RootLayout({
     <html
       lang="en"
       className={cn(
-        "h-full",
-        "antialiased",
+        "h-full antialiased",
         josefinSans.variable,
         domusTitling.variable
       )}
     >
+      <head>
+        <link rel="preload" as="image" href="/illustration.webp" />
+      </head>
       <body className="flex min-h-full flex-col">{children}</body>
     </html>
   )
