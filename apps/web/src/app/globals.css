@@ -1,0 +1,160 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-domus: var(--font-domus-titling);
+  --font-heading: var(--font-sans);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Primary */
+  --color-espresso: var(--espresso);
+  --color-chocolate: var(--chocolate);
+  --color-vanilla: var(--vanilla);
+  --color-foam: var(--foam);
+  --color-bean: var(--bean);
+  --color-caramel: var(--caramel);
+  --color-toasted: var(--toasted);
+  --color-cream: var(--cream);
+  --color-toffee: var(--toffee);
+
+  /* Other */
+  --color-sage: var(--sage);
+  --color-pistachio: var(--pistachio);
+  --color-matcha: var(--matcha);
+  --color-strawberry: var(--strawberry);
+  --color-apple: var(--apple);
+  --color-cherry: var(--cherry);
+  --color-slate: var(--slate);
+  --color-steel: var(--steel);
+  --color-blueberry: var(--blueberry);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --background-image-grad-cappuccino: var(--grad-cappuccino);
+  --background-image-grad-mocha: var(--grad-mocha);
+  --background-image-grad-caramel: var(--grad-caramel);
+}
+
+:root {
+  /* Primary */
+  --espresso: #161111;
+  --chocolate: #312525;
+  --vanilla: #ebdfd0;
+  --foam: #dac0ab;
+  --bean: #957259;
+  --caramel: #634832;
+  --toasted: #38220f;
+  --cream: #fcf9f5;
+  --toffee: #a4623b;
+
+  /* Other */
+  --sage: #a8c29f;
+  --pistachio: #7fa47a;
+  --matcha: #5f7f63;
+  --strawberry: #c8786e;
+  --apple: #a4564e;
+  --cherry: #8d3f38;
+  --slate: #9cb7c7;
+  --steel: #6f8ea5;
+  --blueberry: #4e6a7a;
+
+  /* Gradients */
+  --grad-cappuccino: linear-gradient(
+    180deg,
+    #ebdfd0 0%,
+    #957259 50.48%,
+    #312525 100%
+  );
+  --grad-mocha: linear-gradient(
+    180deg,
+    #ebdfd0 0%,
+    #dac0ab 50.48%,
+    #957259 100%
+  );
+  --grad-caramel: linear-gradient(
+    180deg,
+    #957259 0%,
+    #634832 50.48%,
+    #38220f 100%
+  );
+
+  --radius: 0.625rem;
+  --background: var(--cream);
+  --foreground: var(--espresso);
+  --card: var(--cream);
+  --card-foreground: var(--espresso);
+  --popover: var(--cream);
+  --popover-foreground: var(--espresso);
+  --primary: var(--espresso);
+  --primary-foreground: var(--cream);
+  --secondary: var(--vanilla);
+  --secondary-foreground: var(--espresso);
+  --muted: var(--vanilla);
+  --muted-foreground: var(--bean);
+  --accent: var(--foam);
+  --accent-foreground: var(--espresso);
+  --destructive: var(--cherry);
+  --border: var(--foam);
+  --input: var(--foam);
+  --ring: var(--bean);
+}
+
+.dark {
+  --background: var(--espresso);
+  --foreground: var(--cream);
+  --card: var(--chocolate);
+  --card-foreground: var(--cream);
+  --popover: var(--chocolate);
+  --popover-foreground: var(--cream);
+  --primary: var(--vanilla);
+  --primary-foreground: var(--espresso);
+  --secondary: var(--caramel);
+  --secondary-foreground: var(--cream);
+  --muted: var(--chocolate);
+  --muted-foreground: var(--foam);
+  --accent: var(--caramel);
+  --accent-foreground: var(--cream);
+  --destructive: var(--strawberry);
+  --border: var(--caramel);
+  --input: var(--caramel);
+  --ring: var(--bean);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

@@ -32,3 +32,4 @@ plan.md
 *.sw?
 .claude/
 .turbo/
+.extras/

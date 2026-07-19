@@ -1,0 +1,26 @@
+# Copy to .dev.vars for local `next dev`; set these via `wrangler secret put` in prod.
+
+# Google service account (share each sheet as Viewer with GOOGLE_SA_EMAIL)
+GOOGLE_SA_EMAIL="svc@project.iam.gserviceaccount.com"
+GOOGLE_SA_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+
+# One spreadsheet id per entity
+SHEET_ID_STAFF=""
+SHEET_ID_PLAYERS=""
+SHEET_ID_MAPPOOLS=""
+SHEET_ID_MATCHES=""
+
+# Optional A1 range overrides (default: whole first tab)
+# RANGE_STAFF="Sheet1!A1:Z"
+# RANGE_PLAYERS="Sheet1!A1:Z"
+# RANGE_MATCHES="Sheet1!A1:BZ"
+
+# Mappools: stage -> A1 range (row 1 of each range must be headers)
+MAPPOOL_STAGES='{"Round of 32":"R32!A1:Z","Round of 16":"R16!A1:Z"}'
+
+# osu! API v2 client (Settings -> OAuth -> New OAuth Application)
+OSU_CLIENT_ID=""
+OSU_CLIENT_SECRET=""
+
+# Shared secret guarding /api/revalidate (match this in the Apps Script trigger)
+REVALIDATE_SECRET=""
