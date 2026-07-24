@@ -102,6 +102,8 @@ Required in `.env.local`:
 | `SESSION_SECRET` | Session JWT signing secret |
 | `IRC_BOT_USERNAME` | osu! IRC bot username |
 | `IRC_BOT_PASSWORD` | osu! IRC password |
+| `IRC_RELAY_URL` | Base URL for the VPS IRC relay |
+| `IRC_RELAY_SECRET` | Secret sent to the IRC relay as `X-Relay-Secret` |
 
 `GOOGLE_APPLICATION_CREDENTIALS` must be inline JSON in Pages runtime. The `private_key` value may contain escaped `\n`; the server normalizes it before Web Crypto import.
 
@@ -115,8 +117,10 @@ Implemented routes:
 | --- | --- |
 | `GET /api/auth/osu/login` | Starts osu! OAuth |
 | `GET /auth/callback` | osu! OAuth callback |
+| `GET /api/auth/osu/callback` | Alternate osu! OAuth callback |
 | `GET /api/auth/session` | Reads current session |
 | `POST /api/auth/logout` | Clears session cookie |
+| `GET /api/auth/bypass` | Creates a read-only session when access restriction is disabled |
 | `GET /api/auth/debug` | Local-only env diagnostic |
 | `GET /api/auth/osu/preflight` | Local-only osu! credential diagnostic |
 | `GET /api/auth/session/debug` | Local-only session cookie diagnostic |
@@ -170,10 +174,12 @@ inventory:
 match_id, player, egg, sugar, butter, flour, milk
 
 items:
-item_id, name, enabled, timing, cost_egg, cost_sugar, cost_butter, cost_flour, cost_milk
+item_id, name, cost_egg, cost_sugar, cost_butter, cost_flour, cost_milk,
+timing, effect_type, effect_payload, enabled
 
 item_events:
-event_id, match_id, player, item_id, target, created_at
+event_id, match_id, player_id, item_id, action, target, payload, created_by,
+created_at, reverted_at, status, activated_at, resolved_at, resolution
 
 audit_log:
 created_at, actor, action, entity_type, entity_id, before_json, after_json
@@ -185,40 +191,93 @@ Match flow phases are:
 lobby, roll, order, home_mod, ban, craft, play, ready_result, completed
 ```
 
-## API State
+## API Reference
 
-Implemented:
+All API routes are implemented in `functions/api/[[route]].ts`. Unless marked public or local-only, requests require the
+`mws_ref_session` HTTP-only cookie. A bypass session with `osu_id: 0` can read authenticated routes but cannot call
+mutations.
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/matches` | Real Sheets-backed dashboard data |
-| `GET /api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Loads round mappool plus match-specific pick/ban/completed overrides and current score |
-| `GET /api/match/:matchId/inventory?playerA=&playerB=` | Loads both players' ingredient inventories |
-| `PUT /api/match/:matchId/inventory` | Manually updates one player's inventory; body: `player`, ingredient counts |
-| `GET /api/match/:matchId/state` | Loads persisted match flow state, defaulting to `lobby` or `roll` based on lobby URL |
-| `POST /api/match/:matchId/state` | Advances roll/order/home-mod flow state |
-| `POST /api/match/:matchId/action` | Writes map `pick`, `ban`, `protect`, or `unpick`; strict flow order unless `manualOrder: true` |
-| `POST /api/match/:matchId/score` | Writes map score/winner, marks map completed, awards ingredient, advances flow |
-| `POST /api/match/:matchId/recipe` | Validates recipe timing/cost, deducts inventory, writes item event |
-| `POST /api/match/:matchId/post-result` | Writes final match winner/score and completes flow |
-| `POST /api/match/:matchId/forfeit` | Marks match forfeit and writes loser score as `-1` |
-| `POST /api/match/:matchId/create-lobby` | Creates osu! lobby through IRC relay, writes lobby URL, returns follow-up commands |
-| `POST /api/match/:matchId/join-lobby` | Attaches an existing `mpId`, validates via relay when configured, writes lobby URL |
-| `POST /api/match/:matchId/close-lobby` | Sends `!mp close` and posts chat log to staff webhook when configured |
-| `POST /api/match/:matchId/remind` | Posts Discord reminder using player `discord_id` values |
-| `POST /api/irc/send` | Sends one IRC relay message |
-| `GET /api/irc/stream?channel=` | Proxies IRC relay SSE stream |
-| `GET /api/public/config` | Exposes public tournament config, rules, test mode, and order settings |
-| `GET /api/health` | Health JSON |
-| `GET /api/public/state` | Placeholder public JSON |
+### System And Public Routes
+
+| Method | Route | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/health` | Public | Returns service name, runtime, current timestamp, and `ok: true`. |
+| `GET` | `/api/public/config` | Public | Returns tournament config, rules, scoring, test mode, and order settings. |
+| `GET` | `/api/public/state` | Public | Returns the current placeholder public tournament-state payload. |
+
+### Authentication Routes
+
+| Method | Route | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/api/auth/osu/login` | Public | Starts osu! OAuth and stores the state cookie. |
+| `GET` | `/api/auth/osu/callback?code=&state=` | Public | OAuth callback alias; validates access and creates the session. |
+| `GET` | `/auth/callback?code=&state=` | Public | Primary OAuth callback path with the same behavior as the API alias. |
+| `GET` | `/api/auth/session` | Public | Returns the current session or `401` when unauthenticated. |
+| `POST` | `/api/auth/logout` | Public | Clears the session cookie. |
+| `GET` | `/api/auth/bypass` | Public | Creates a read-only demo session when `Restrict Access` is false. |
+| `GET` | `/api/auth/debug` | Local-only | Reports environment-variable presence without returning secret values. |
+| `GET` | `/api/auth/session/debug` | Local-only | Reports cookie presence, JWT verification state, and session identity. |
+| `GET` | `/api/auth/osu/preflight` | Local-only | Tests osu! client-credential exchange through the configured proxy. |
+
+### Match Data And Flow Routes
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/matches` | Returns all, assigned, and active Sheets-backed matches. |
+| `GET` | `/api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Returns pool maps, match overrides, and wins. |
+| `GET` | `/api/match/:matchId/inventory?playerA=&playerB=` | Returns both players' ingredient inventories. |
+| `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
+| `GET` | `/api/match/:matchId/state` | Returns persisted flow state or its lobby-aware default. |
+| `POST` | `/api/match/:matchId/state` | Records rolls, order selection, or a player's home mod. |
+| `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or `unpick` and activates map recipes. |
+| `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
+| `POST` | `/api/match/:matchId/post-result` | Completes the match and posts the result webhook. |
+| `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1`. |
+
+### Recipe Routes
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/match/:matchId/recipes` | Returns persisted recipe events and lifecycle status. |
+| `POST` | `/api/match/:matchId/recipe` | Validates, purchases, and activates or immediately resolves a recipe. |
+| `DELETE` | `/api/match/:matchId/recipe/:eventId` | Reverts and refunds an active recipe that has not activated on a map. |
+
+Recipe events use `active`, `resolved`, or `reverted` status. Legacy events without a status are treated as resolved so
+old rows cannot activate again. Loading the recipe route also adds missing lifecycle columns to `item_events`.
+
+### Lobby And IRC Routes
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/irc/send` | Sends one `{ channel, message }` payload through the IRC relay. |
+| `GET` | `/api/irc/stream?channel=` | Proxies the relay's server-sent event stream. |
+| `POST` | `/api/match/:matchId/create-lobby` | Creates a lobby, writes its URL, and returns setup commands. |
+| `POST` | `/api/match/:matchId/join-lobby` | Attaches and probes an existing multiplayer lobby. |
+| `POST` | `/api/match/:matchId/close-lobby` | Closes the lobby and uploads its chat log when configured. |
+| `POST` | `/api/match/:matchId/remind` | Posts the configured Discord match reminder. |
+
+### Mutation Bodies
+
+`PUT /api/match/:matchId/inventory` accepts absolute, nonnegative ingredient counts:
+
+```json
+{
+  "player": "Player Name",
+  "egg": 2,
+  "sugar": 1,
+  "butter": 0,
+  "flour": 3,
+  "milk": 1
+}
+```
 
 `POST /api/match/:matchId/state` supports these actions:
 
 | `action` | Body fields | Result |
 | --- | --- | --- |
-| `record_rolls` | `rollA`, `rollB` | Stores rolls; tie stays in `roll`, otherwise advances to `order` |
-| `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `home_mod` |
-| `set_home_mod` | `player`, `homeMod` | Stores player home mod; after both choose, advances to `ban` |
+| `record_rolls` | `rollA`, `rollB` | Stores rolls; tie stays in `roll`, otherwise advances to `order`. |
+| `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `home_mod`. |
+| `set_home_mod` | `player`, `homeMod` | Stores a home mod; after both choose, advances to `ban`. |
 
 `POST /api/match/:matchId/action` body:
 
@@ -231,11 +290,61 @@ Implemented:
 }
 ```
 
-When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. When `manualOrder` is `true`, it preserves the old free-action behavior: either player may pick, ban, or protect any available map, and the endpoint does not advance `match_state`.
+When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
+`manualOrder: true`, either player may pick, ban, or protect an eligible map. Use `action: "unpick"` to clear the pick,
+scores, and winner; `unpick` does not require `player`.
 
-Use `"action": "unpick"` with a picked `slot` to clear `picked_by`, score fields, winner, and return the map to `available`. `unpick` does not require `player`.
+`POST /api/match/:matchId/score` derives the winner from recipe-adjusted scores:
 
-Most mutation endpoints return `{ ok: true, simulated: true }` without writing Sheets when test mode is enabled in the `config` tab.
+```json
+{
+  "slot": "NM1",
+  "playerA": "Player A",
+  "playerB": "Player B",
+  "scoreA": 987432,
+  "scoreB": 854201
+}
+```
+
+Replay recipes return `replayRequired: true` on the first run. Submit the replay through the same endpoint. Otherwise,
+the response contains final scores, winner, inventories, flow state, and any scoring-mode restore commands.
+
+`POST /api/match/:matchId/recipe` always requires `player` and `recipeId`. Activation-specific fields are optional unless
+the selected effect requires them:
+
+```json
+{
+  "player": "Player A",
+  "recipeId": 6,
+  "mod": "HD",
+  "modA": "HD",
+  "modB": "HR",
+  "targetSlot": "NM2",
+  "ingredient": "egg",
+  "rewardIngredients": ["egg", "milk"]
+}
+```
+
+- `mod` is used by Sugar Cookies.
+- `modA` and `modB` are used by Custard.
+- `targetSlot` is used by map protection and unban effects.
+- `ingredient` is used by Omelette and Dough.
+- `rewardIngredients` must contain exactly two ingredients for Caramel.
+
+Other mutation bodies:
+
+| Route | JSON body |
+| --- | --- |
+| `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
+| `POST /api/match/:matchId/create-lobby` | `{ "playerA": "...", "playerB": "...", "refUsername": "..." }` |
+| `POST /api/match/:matchId/join-lobby` | `{ "mpId": "123456" }` |
+| `POST /api/match/:matchId/close-lobby` | `{ "channel": "#mp_123", "messages": [{ "ts": "...", "from": "...", "message": "..." }] }` |
+| `POST /api/match/:matchId/remind` | No body required. |
+| `POST /api/match/:matchId/post-result` | `{ "playerA": "...", "playerB": "...", "scoreA": 5, "scoreB": 3, "winner": "..." }` |
+| `POST /api/match/:matchId/forfeit` | `{ "winner": "...", "playerA": "...", "playerB": "..." }` |
+
+Test mode simulates IRC and lobby operations where marked in the implementation. Sheet-backed match, inventory, score,
+recipe, and result writes remain authoritative.
 
 ## Frontend State
 
@@ -247,12 +356,13 @@ Dashboard:
 
 Match panel:
 
-- Loads mappool, inventory, config, and match flow state from the API on mount.
+- Loads mappool, inventory, config, match flow state, and persisted recipe events from the API on mount.
 - Keeps IRC mounted across tab switches so SSE messages persist.
 - Uses Match Control for roll/order/score flow and event log.
 - Uses the left player column for score, home mod selection, inventory, lobby actions, and result posting.
-- Manual pick/ban order defaults on, allowing free pick/ban/protect action selection; turning it off enforces the persisted match flow.
-- Test mode runs the same local flow loop without writing Sheets or sending IRC relay messages.
+- Uses the Recipes tab for activation inputs, lifecycle status, and server-side revert/refund.
+- Manual pick/ban order defaults on; turning it off enforces the persisted match flow.
+- Test mode avoids live IRC transport while retaining authoritative Sheet-backed match and recipe state.
 
 ## Repo Layout
 
