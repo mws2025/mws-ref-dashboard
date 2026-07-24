@@ -75,7 +75,7 @@ type ApiPoolMap = {
   winner?: string
 }
 
-type HomeMod = "NM" | "HD" | "HR" | "DT" | "FM"
+type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
 type MatchFlowPhase =
   | "lobby"
   | "roll"
@@ -436,10 +436,13 @@ async function getGoogleAccessToken(env: Bindings): Promise<string> {
 // Module-level read cache — survives across requests on the same CF isolate (burst window)
 const _sheetCache = new Map<string, { data: string[][]; ts: number }>()
 const _CACHE_TTL: Partial<Record<string, number>> = {
-  "config!A:B":   30_000,
-  "mappool!A1:Z": 30_000,
-  "items!A1:Z":   30_000,
-  "matches!A1:Z": 10_000,
+  "config!A:B":          30_000,
+  "mappool!A1:Z":        30_000,
+  "items!A1:Z":          30_000,
+  "matches!A1:Z":        10_000,
+  "match_maps!A1:Z":      2_000,
+  "inventory!A1:Z":       2_000,
+  "item_events!A1:ZZ":    2_000,
 }
 const _DEFAULT_TTL = 8_000
 
@@ -1329,8 +1332,12 @@ function parseRecipeEventRecord(record: SheetRecord): RecipeEventRecord | null {
   }
 }
 
-async function getRecipeEvents(env: Bindings, matchId: string): Promise<RecipeEventRecord[]> {
-  await ensureSheetWithHeaders(env, "item_events", ITEM_EVENT_HEADERS)
+async function getRecipeEvents(
+  env: Bindings,
+  matchId: string,
+  ensureHeaders = true,
+): Promise<RecipeEventRecord[]> {
+  if (ensureHeaders) await ensureSheetWithHeaders(env, "item_events", ITEM_EVENT_HEADERS)
   return sheetRowsToRecords(await getSheetValuesSafe(env, "item_events!A1:ZZ"))
     .map(parseRecipeEventRecord)
     .filter((event): event is RecipeEventRecord => event !== null && event.matchId === matchId)
@@ -1484,6 +1491,41 @@ function publicRecipeEvent(event: RecipeEventRecord): Record<string, unknown> {
     activatedAt: event.activatedAt || undefined,
     resolvedAt: event.resolvedAt || undefined,
     resolution: event.resolution,
+  }
+}
+
+function publicSnapshotRecipe(
+  event: RecipeEventRecord,
+  items: SheetRecord[],
+): Record<string, unknown> {
+  const item = itemForEvent(items, event)
+  return {
+    eventId: event.id,
+    recipeId: recipeIdNumber(event.itemId),
+    name: firstValue(item ?? {}, ["name"]) || event.itemId,
+    status: event.status,
+    target: event.target || null,
+    createdAt: event.createdAt || null,
+    activatedAt: event.activatedAt || null,
+    resolvedAt: event.resolvedAt || null,
+  }
+}
+
+function publicSnapshotRecipesForPlayer(
+  events: RecipeEventRecord[],
+  items: SheetRecord[],
+  player: string,
+): Record<string, unknown> {
+  const playerEvents = events.filter((event) =>
+    samePlayer(event.player, player) && event.status !== "reverted"
+  )
+  const activeEvents = playerEvents.filter((event) => event.status === "active")
+  const current = activeEvents.at(-1)
+  const previous = playerEvents.filter((event) => event.status === "resolved").at(-1)
+  return {
+    current: current ? publicSnapshotRecipe(current, items) : null,
+    previous: previous ? publicSnapshotRecipe(previous, items) : null,
+    active: activeEvents.map((event) => publicSnapshotRecipe(event, items)),
   }
 }
 
@@ -2890,6 +2932,119 @@ app.get("/api/public/state", (c) => {
       Boolean(c.env.GOOGLE_SHEETS_TOURNAMENT_ID),
     updatedAt: new Date().toISOString(),
   })
+})
+
+app.get("/api/public/match/:matchId/snapshot", async (c) => {
+  c.header("Access-Control-Allow-Origin", "*")
+  c.header("Cache-Control", "public, max-age=2, stale-while-revalidate=3")
+  c.header("X-Content-Type-Options", "nosniff")
+
+  const matchId = c.req.param("matchId").trim()
+  if (!matchId) return c.json({ error: "matchId required" }, 400)
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+
+    const [matchMapValues, inventoryValues, recipeEvents, items, poolValues] = await Promise.all([
+      getSheetValuesSafe(c.env, "match_maps!A1:Z"),
+      getSheetValuesSafe(c.env, "inventory!A1:Z"),
+      getRecipeEvents(c.env, matchId, false),
+      getItemRecords(c.env),
+      getSheetValuesSafe(c.env, "mappool!A1:Z"),
+    ])
+    const matchMaps = sheetRowsToRecords(matchMapValues)
+      .filter((record) => firstValue(record, ["match_id"]) === matchId)
+    const inventories = sheetRowsToRecords(inventoryValues)
+      .filter((record) => firstValue(record, ["match_id"]) === matchId)
+    const poolRecords = sheetRowsToRecords(poolValues)
+      .filter((record) =>
+        !match.mappool ||
+        firstValue(record, ["round"]).toLowerCase() === match.mappool.toLowerCase()
+      )
+    const mapsBySlot = new Map(poolRecords.map((record) => [
+      firstValue(record, ["map_id", "slot"]).toLowerCase(),
+      record,
+    ]))
+
+    const sideForPlayer = (player: string): "red" | "blue" | null => {
+      if (samePlayer(player, match.playerA)) return "red"
+      if (samePlayer(player, match.playerB)) return "blue"
+      return null
+    }
+    const numberOrNull = (value: string): number | null => {
+      if (!value.trim()) return null
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    const publicMap = (record: SheetRecord): Record<string, unknown> => {
+      const slot = firstValue(record, ["slot", "map_id"])
+      const poolRecord = mapsBySlot.get(slot.toLowerCase()) ?? {}
+      const pickedBy = firstValue(record, ["picked_by"])
+      const bannedBy = firstValue(record, ["banned_by"])
+      const winner = firstValue(record, ["winner"])
+      return {
+        slot,
+        pool: firstValue(poolRecord, ["mod_pool", "pool"]).toUpperCase() || null,
+        title: firstValue(poolRecord, ["title", "map"]) || null,
+        beatmapId: firstValue(poolRecord, ["beatmap_id"]) || null,
+        status: firstValue(record, ["status"]).toLowerCase() || "available",
+        by: sideForPlayer(pickedBy || bannedBy),
+        player: pickedBy || bannedBy || null,
+        winner: sideForPlayer(winner),
+        winnerPlayer: winner || null,
+        score: {
+          red: numberOrNull(firstValue(record, ["score_a"])),
+          blue: numberOrNull(firstValue(record, ["score_b"])),
+        },
+      }
+    }
+    const inventoryFor = (player: string): InventoryMap => parseInventoryRecord(
+      inventories.find((record) =>
+        samePlayer(firstValue(record, ["player", "player_id"]), player)
+      )
+    )
+    const stars = {
+      red: countCompletedWins(matchMaps, matchId, match.playerA),
+      blue: countCompletedWins(matchMaps, matchId, match.playerB),
+    }
+
+    return c.json({
+      matchId: match.id,
+      round: match.round,
+      status: match.status,
+      bestOf: match.bestOf ?? null,
+      players: {
+        red: { name: match.playerA, osuId: match.playerAOsuId ?? null },
+        blue: { name: match.playerB, osuId: match.playerBOsuId ?? null },
+      },
+      maps: {
+        picked: matchMaps
+          .filter((record) => ["picked", "in-progress", "completed"].includes(
+            firstValue(record, ["status"]).toLowerCase()
+          ))
+          .map(publicMap),
+        banned: matchMaps
+          .filter((record) => firstValue(record, ["status"]).toLowerCase() === "banned")
+          .map(publicMap),
+      },
+      score: stars,
+      stars,
+      ingredients: {
+        red: inventoryFor(match.playerA),
+        blue: inventoryFor(match.playerB),
+      },
+      recipes: {
+        red: publicSnapshotRecipesForPlayer(recipeEvents, items, match.playerA),
+        blue: publicSnapshotRecipesForPlayer(recipeEvents, items, match.playerB),
+      },
+      updatedAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    return c.json({
+      error: error instanceof Error ? error.message : "Failed to load public match snapshot",
+    }, 500)
+  }
 })
 
 app.get("/api/public/config", async (c) => {

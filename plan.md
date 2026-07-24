@@ -283,6 +283,7 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | GET | `/api/health` | Done, public |
 | GET | `/api/public/config` | Done, public |
 | GET | `/api/public/state` | Done, placeholder payload |
+| GET | `/api/public/match/:id/snapshot` | Done, public OBS overlay state |
 | GET | `/api/auth/osu/login` | Done |
 | GET | `/api/auth/osu/callback` | Done |
 | GET | `/auth/callback` | Done |

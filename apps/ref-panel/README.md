@@ -204,6 +204,29 @@ mutations.
 | `GET` | `/api/health` | Public | Returns service name, runtime, current timestamp, and `ok: true`. |
 | `GET` | `/api/public/config` | Public | Returns tournament config, rules, scoring, test mode, and order settings. |
 | `GET` | `/api/public/state` | Public | Returns the current placeholder public tournament-state payload. |
+| `GET` | `/api/public/match/:matchId/snapshot` | Public | Returns the sanitized live state used by stream overlays. |
+
+The public snapshot supports cross-origin browser requests and requires no cookie. OBS Browser Source example for match
+`67`:
+
+```js
+const response = await fetch(
+  "https://mws-ref-dashboard.pages.dev/api/public/match/67/snapshot",
+  {
+    credentials: "omit",
+    headers: { Accept: "application/json" },
+  },
+)
+
+if (!response.ok) {
+  throw new Error(`Snapshot request failed: ${response.status}`)
+}
+
+const snapshot = await response.json()
+```
+
+The response contains `players`, picked and banned `maps`, `score`/`stars`, current `ingredients`, and per-side recipe
+`current`, `previous`, and `active` values. It returns `Access-Control-Allow-Origin: *` and a two-second public cache.
 
 ### Authentication Routes
 
