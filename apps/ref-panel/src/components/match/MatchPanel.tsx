@@ -6,7 +6,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
-import type { HomeMod, IngKey, Inventory, Match, MatchFlowState, PoolMap } from "@/types"
+import type {
+  HomeMod,
+  IngKey,
+  Inventory,
+  Match,
+  MatchFlowState,
+  PoolMap,
+  RecipeActivation,
+  RecipeEvent,
+} from "@/types"
 import { LiveBadge } from "../LiveBadge"
 import { FlowPanel } from "./FlowPanel"
 import { IrcChat, type IrcChatHandle, type LiveMsg } from "./IrcChat"
@@ -16,14 +25,14 @@ import { PlayerColumn } from "./PlayerColumn"
 import { RecipePanel } from "./RecipePanel"
 import { TestSimPanel } from "./TestSimPanel"
 
-interface UsedRecipe {
-  id: string
-  player: string
-  recipeId: number
-  snapshot: Inventory
-}
-
 type EventKind = "join" | "leave" | "roll" | "abort" | "other_join" | "other_roll" | "info"
+
+interface RecipePickSetup {
+  eventIds: string[]
+  mods: string
+  commandsBefore: string[]
+  notices: string[]
+}
 
 interface MatchEvent {
   id: string
@@ -90,18 +99,6 @@ function orderedPlayersFromPattern(patternRaw: string, firstPlayer: string, seco
   return Array.from(pattern).map((token) => token === "A" || token === "1" ? firstPlayer : secondPlayer)
 }
 
-function normalizeInventory(raw: unknown): Inventory | null {
-  if (!raw || typeof raw !== "object") return null
-  const record = raw as Record<string, unknown>
-  return {
-    egg: Number(record.egg ?? 0) || 0,
-    sugar: Number(record.sugar ?? 0) || 0,
-    butter: Number(record.butter ?? 0) || 0,
-    flour: Number(record.flour ?? 0) || 0,
-    milk: Number(record.milk ?? 0) || 0,
-  }
-}
-
 function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null): string {
   if (!state) return "Load match flow state."
   const currentMap = state.currentSlot
@@ -157,7 +154,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [manualMapActions, setManualMapActions] = useState(true)
   const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
   const [testResultUnlocked, setTestResultUnlocked] = useState(false)
-  const [usedRecipes, setUsedRecipes] = useState<UsedRecipe[]>([])
+  const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
   const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
@@ -224,11 +221,12 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   useEffect(() => {
     async function load() {
       const params = new URLSearchParams({ mappool: match.mappool ?? "", playerA: match.playerA, playerB: match.playerB })
-      const [mpRes, invRes, cfgRes, stateRes] = await Promise.all([
+      const [mpRes, invRes, cfgRes, stateRes, recipeRes] = await Promise.all([
         fetch(`/api/match/${match.id}/mappool?${params}`, { credentials: "include" }),
         fetch(`/api/match/${match.id}/inventory?${params}`, { credentials: "include" }),
         fetch("/api/public/config"),
         fetch(`/api/match/${match.id}/state`, { credentials: "include" }),
+        fetch(`/api/match/${match.id}/recipes`, { credentials: "include" }),
       ])
       if (mpRes.ok) {
         const data = await mpRes.json() as { mappool: PoolMap[]; scoreA: number; scoreB: number }
@@ -253,9 +251,13 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       } else {
         setFlowState(defaultFlowState(match, liveLobbyUrl))
       }
+      if (recipeRes.ok) {
+        const data = await recipeRes.json() as { events?: RecipeEvent[] }
+        setRecipeEvents(data.events ?? [])
+      }
     }
     void load()
-  }, [match.id])
+  }, [liveLobbyUrl, match])
 
   function injectIrcMsg(from: string, message: string, local = false) {
     const msg: LiveMsg = { ts: new Date().toISOString(), from, message, ...(local ? { local: true } : {}) }
@@ -375,23 +377,12 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
   }
 
-  function submitScore(slot: string, scoreA: number, scoreB: number, winner: string) {
-    const map = liveMappool?.find((m) => m.slot === slot)
-    const wasCompleted = map?.status === "completed"
-    const winnerIsA = winner === match.playerA
-    const nextScoreA = liveScoreA + (!wasCompleted && winnerIsA ? 1 : 0)
-    const nextScoreB = liveScoreB + (!wasCompleted && !winnerIsA ? 1 : 0)
-    applyCompletedMap(slot, winner)
-    setLiveScoreA(nextScoreA)
-    setLiveScoreB(nextScoreB)
-
-    const nextPicker = opponentOf(winner, match.playerA, match.playerB)
-
+  function submitScore(slot: string, scoreA: number, scoreB: number, selectedWinner: string) {
     void fetch(`/api/match/${match.id}/score`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slot, scoreA, scoreB, winner, playerA: match.playerA, playerB: match.playerB }),
+      body: JSON.stringify({ slot, scoreA, scoreB, winner: selectedWinner, playerA: match.playerA, playerB: match.playerB }),
     }).then(async (res) => {
       if (!res.ok) {
         const err = await res.json() as { error?: string }
@@ -399,67 +390,103 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         return
       }
       const data = await res.json() as {
+        replayRequired?: boolean
+        winner?: string
         totals?: { scoreA: number; scoreB: number }
-        inventory?: Inventory
+        inventories?: { a: Inventory; b: Inventory }
         state?: MatchFlowState
+        restoreCommands?: string[]
+        notices?: string[]
       }
+      if (data.replayRequired) {
+        toast.info(data.notices?.[0] ?? "Replay required")
+        for (const notice of data.notices ?? []) ircRef.current?.send(notice)
+        const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
+        if (recipesRes.ok) {
+          const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
+          setRecipeEvents(recipesData.events ?? [])
+        }
+        return
+      }
+      const winner = data.winner
+      if (!winner) return
+      if (winner.toLowerCase() !== selectedWinner.toLowerCase()) {
+        toast.info(`Recipe-adjusted winner: ${winner}`)
+      }
+      applyCompletedMap(slot, winner)
       if (data.totals) {
         setLiveScoreA(data.totals.scoreA)
         setLiveScoreB(data.totals.scoreB)
       }
-      if (data.inventory) {
-        setLiveInventory((prev) => {
-          if (!prev) return prev
-          return winnerIsA ? { ...prev, a: data.inventory! } : { ...prev, b: data.inventory! }
-        })
-      }
+      if (data.inventories) setLiveInventory(data.inventories)
       if (data.state) setFlowState(data.state)
-      announceGameResult(data.totals?.scoreA ?? nextScoreA, data.totals?.scoreB ?? nextScoreB, nextPicker)
+      for (const command of data.restoreCommands ?? []) ircRef.current?.send(command)
+      const nextPicker = opponentOf(winner, match.playerA, match.playerB)
+      announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker)
+      const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
+      if (recipesRes.ok) {
+        const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
+        setRecipeEvents(recipesData.events ?? [])
+      }
     })
   }
 
-  function handleRecipeUse(player: string, recipeId: number) {
+  async function refreshRecipeSurfaces() {
+    const params = new URLSearchParams({ mappool: match.mappool ?? "", playerA: match.playerA, playerB: match.playerB })
+    const [inventoryRes, recipesRes, mappoolRes] = await Promise.all([
+      fetch(`/api/match/${match.id}/inventory?${params}`, { credentials: "include" }),
+      fetch(`/api/match/${match.id}/recipes`, { credentials: "include" }),
+      fetch(`/api/match/${match.id}/mappool?${params}`, { credentials: "include" }),
+    ])
+    if (inventoryRes.ok) setLiveInventory(await inventoryRes.json() as { a: Inventory; b: Inventory })
+    if (recipesRes.ok) {
+      const data = await recipesRes.json() as { events?: RecipeEvent[] }
+      setRecipeEvents(data.events ?? [])
+    }
+    if (mappoolRes.ok) {
+      const data = await mappoolRes.json() as { mappool?: PoolMap[] }
+      if (data.mappool) setLiveMappool(data.mappool)
+    }
+  }
+
+  function handleRecipeUse(player: string, recipeId: number, activation: RecipeActivation) {
     const recipe = RECIPES.find((r) => r.id === recipeId)
     if (!recipe || !liveInventory) return
     const side = player.toLowerCase() === match.playerA.toLowerCase() ? "a" : "b"
-    const currentInv = liveInventory[side]
-    if (!canAfford(recipe, currentInv)) {
+    if (!canAfford(recipe, liveInventory[side])) {
       toast.error("Not enough ingredients")
       return
     }
-    const nextInv = { ...currentInv }
-    for (const [key, amount] of Object.entries(recipe.cost) as [IngKey, number][]) {
-      nextInv[key] = Math.max(0, nextInv[key] - amount)
-    }
-    setLiveInventory((prev) => prev ? { ...prev, [side]: nextInv } : prev)
-    const usedId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    setUsedRecipes((prev) => [...prev, { id: usedId, player, recipeId, snapshot: currentInv }])
 
     void fetch(`/api/match/${match.id}/recipe`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ player, recipeId }),
+      body: JSON.stringify({ player, recipeId, ...activation }),
     }).then(async (res) => {
       if (!res.ok) {
         const err = await res.json() as { error?: string }
         toast.error(err.error ?? "Failed to use recipe")
-        setLiveInventory((prev) => prev ? { ...prev, [side]: currentInv } : prev)
         return
       }
-      const data = await res.json() as { inventory?: unknown }
-      const savedInventory = normalizeInventory(data.inventory)
-      if (savedInventory) setLiveInventory((prev) => prev ? { ...prev, [side]: savedInventory } : prev)
+      await refreshRecipeSurfaces()
       toast.success(`${recipe.name} crafted`)
     })
   }
 
-  function handleUndoRecipe(id: string) {
-    const entry = usedRecipes.find((r) => r.id === id)
-    if (!entry || !liveInventory) return
-    const side = entry.player.toLowerCase() === match.playerA.toLowerCase() ? "a" : "b"
-    setLiveInventory((prev) => prev ? { ...prev, [side]: entry.snapshot } : prev)
-    setUsedRecipes((prev) => prev.filter((r) => r.id !== id))
+  function handleUndoRecipe(eventId: string) {
+    void fetch(`/api/match/${match.id}/recipe/${eventId}`, {
+      method: "DELETE",
+      credentials: "include",
+    }).then(async (res) => {
+      if (!res.ok) {
+        const error = await res.json() as { error?: string }
+        toast.error(error.error ?? "Failed to revert recipe")
+        return
+      }
+      await refreshRecipeSurfaces()
+      toast.success("Recipe reverted")
+    })
   }
 
   function clearHomeMod(player: string) {
@@ -508,15 +535,17 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   function getPickMods(pool: string, nf: boolean): string {
     const p = pool.toUpperCase()
     if (p === "FM" || p === "TB") return "Freemod"
-    if (p === "PS") return nf ? "PSNF" : "None"
+    if (p === "PS") return nf ? "NF" : "None"
     if (p === "HR") return nf ? "HRNF" : "HR"
     if (p === "DT") return nf ? "DTNF" : "DT"
     return nf ? "NF" : "None"
   }
 
-  async function sendPickSequence(map: PoolMap, channel: string) {
+  async function sendPickSequence(map: PoolMap, channel: string, recipeSetup?: RecipePickSetup) {
     if (map.beatmapId) await sendIrc(channel, `!mp map ${map.beatmapId} 0`)
-    await sendIrc(channel, `!mp mods ${getPickMods(map.pool, enforceNF)}`)
+    for (const command of recipeSetup?.commandsBefore ?? []) await sendIrc(channel, command)
+    await sendIrc(channel, `!mp mods ${recipeSetup?.mods || getPickMods(map.pool, enforceNF)}`)
+    for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
     await sendIrc(channel, "!mp timer 120")
   }
 
@@ -758,8 +787,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 labelA={match.playerA}
                 labelB={match.playerB}
                 phase={flowState?.phase}
+                mappool={liveMappool ?? undefined}
                 onUseRecipe={handleRecipeUse}
-                usedRecipes={usedRecipes}
+                recipeEvents={recipeEvents}
                 onUndoRecipe={handleUndoRecipe}
               />
             </TabsContent>
@@ -903,7 +933,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
               toast.error(err.error ?? "Action failed")
               return
             }
-            const data = await res.json() as { state?: MatchFlowState }
+            const data = await res.json() as { state?: MatchFlowState; recipeSetup?: RecipePickSetup }
             if (data.state) setFlowState(data.state)
             else if (action === "unpick") {
               setFlowState((prev) => prev?.currentSlot === map.slot
@@ -911,12 +941,13 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 : prev)
             }
             else if (!manualMapActions && player) advanceLocalAfterMapAction(action, player, map.slot)
-          })
 
-          if (action === "pick") {
-            const channel = lobbyUrlToChannel(liveLobbyUrl)
-            if (channel) void sendPickSequence(map, channel)
-          }
+            if (action === "pick") {
+              const channel = lobbyUrlToChannel(liveLobbyUrl)
+              if (channel) await sendPickSequence(map, channel, data.recipeSetup)
+            }
+            await refreshRecipeSurfaces()
+          })
         }}
       />
     </div>

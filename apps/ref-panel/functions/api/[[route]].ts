@@ -103,6 +103,24 @@ type MatchFlowState = {
 }
 
 type InventoryMap = Record<"egg" | "sugar" | "butter" | "flour" | "milk", number>
+type IngredientKey = keyof InventoryMap
+type RecipeEventStatus = "active" | "resolved" | "reverted"
+
+type RecipeEventRecord = {
+  id: string
+  matchId: string
+  player: string
+  itemId: string
+  action: string
+  target: string
+  payload: Record<string, unknown>
+  status: RecipeEventStatus
+  createdAt: string
+  activatedAt: string
+  resolvedAt: string
+  resolution: Record<string, unknown>
+  revertedAt: string
+}
 
 const OSU_AUTH_BASE = "https://osu.ppy.sh"
 
@@ -144,6 +162,92 @@ const MATCH_STATE_HEADERS = [
   "updated_at",
 ] as const
 const INVENTORY_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
+const ITEM_EVENT_HEADERS = [
+  "event_id",
+  "match_id",
+  "player_id",
+  "item_id",
+  "action",
+  "target",
+  "payload",
+  "created_by",
+  "created_at",
+  "reverted_at",
+  "status",
+  "activated_at",
+  "resolved_at",
+  "resolution",
+] as const
+const RECIPE_MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
+const MAP_BOUND_EFFECTS = new Set([
+  "mod_replace",
+  "score_add",
+  "mod_add_self",
+  "mod_add_both",
+  "replay_top_score",
+  "mod_force_both",
+  "accuracy_mode",
+  "score_multiply",
+  "conditional_replay",
+  "scoring_mode",
+  "win_bonus_steal",
+  "home_base_ingredient",
+  "comeback_bonus",
+])
+const BUILTIN_ITEM_RECORDS: SheetRecord[] = [
+  {
+    item_id: "item_8",
+    name: "Cinnamon Roll",
+    cost_egg: "1",
+    cost_sugar: "2",
+    cost_butter: "1",
+    cost_flour: "1",
+    cost_milk: "1",
+    timing: "ban_phase",
+    effect_type: "protect_map",
+    effect_payload: "{}",
+    enabled: "true",
+  },
+  {
+    item_id: "item_12",
+    name: "Crepe",
+    cost_egg: "1",
+    cost_sugar: "0",
+    cost_butter: "2",
+    cost_flour: "0",
+    cost_milk: "1",
+    timing: "before_map",
+    effect_type: "accuracy_mode",
+    effect_payload: "{\"mode\":\"accuracy\"}",
+    enabled: "true",
+  },
+  {
+    item_id: "item_18",
+    name: "Magic Cake",
+    cost_egg: "0",
+    cost_sugar: "1",
+    cost_butter: "2",
+    cost_flour: "2",
+    cost_milk: "0",
+    timing: "before_map",
+    effect_type: "copy_last_opponent",
+    effect_payload: "{}",
+    enabled: "true",
+  },
+  {
+    item_id: "item_19",
+    name: "Cinnamon Roll",
+    cost_egg: "1",
+    cost_sugar: "0",
+    cost_butter: "2",
+    cost_flour: "2",
+    cost_milk: "1",
+    timing: "ban_phase",
+    effect_type: "unban_map",
+    effect_payload: "{}",
+    enabled: "true",
+  },
+]
 const POOL_TO_INGREDIENT: Record<string, keyof InventoryMap | undefined> = {
   NM: "egg",
   PS: "sugar",
@@ -976,10 +1080,21 @@ async function ensureSheetWithHeaders(env: Bindings, sheetName: string, headers:
     }
   }
 
-  const current = await getSheetValuesSafe(env, `${sheetName}!A1:${colLetter(headers.length - 1)}1`)
-  if (!current[0] || current[0].every((cell) => !cell.trim())) {
+  const current = await getSheetValuesSafe(env, `${sheetName}!A1:ZZ1`)
+  const currentHeaders = current[0]?.map((cell) => cell.trim()) ?? []
+  if (currentHeaders.length === 0 || currentHeaders.every((cell) => !cell)) {
     await batchUpdateValues(env, [
       { range: `${sheetName}!A1:${colLetter(headers.length - 1)}1`, values: [headers as string[]] },
+    ])
+    return
+  }
+
+  const normalized = new Set(currentHeaders.map(normalizeHeader))
+  const missing = headers.filter((header) => !normalized.has(normalizeHeader(header)))
+  if (missing.length > 0) {
+    const merged = [...currentHeaders, ...missing]
+    await batchUpdateValues(env, [
+      { range: `${sheetName}!A1:${colLetter(merged.length - 1)}1`, values: [merged] },
     ])
   }
 }
@@ -1173,6 +1288,295 @@ async function applyInventoryDelta(
     current[key] = Math.max(0, current[key] + rawDelta)
   }
   return writeInventoryAbsolute(env, matchId, player, current, actor, auditAction)
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> {
+  if (!raw.trim()) return {}
+  try {
+    return toRecord(JSON.parse(raw)) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function normalizeRecipeStatus(record: SheetRecord): RecipeEventStatus {
+  if (firstValue(record, ["reverted_at"])) return "reverted"
+  const status = firstValue(record, ["status"]).toLowerCase()
+  if (status === "active" || status === "resolved" || status === "reverted") return status
+  return "resolved"
+}
+
+function parseRecipeEventRecord(record: SheetRecord): RecipeEventRecord | null {
+  const id = firstValue(record, ["event_id", "id"])
+  const matchId = firstValue(record, ["match_id"])
+  const player = firstValue(record, ["player_id", "player"])
+  const itemId = firstValue(record, ["item_id"])
+  if (!id || !matchId || !player || !itemId) return null
+  return {
+    id,
+    matchId,
+    player,
+    itemId,
+    action: firstValue(record, ["action"]) || "use",
+    target: firstValue(record, ["target"]),
+    payload: parseJsonRecord(firstValue(record, ["payload"])),
+    status: normalizeRecipeStatus(record),
+    createdAt: firstValue(record, ["created_at"]),
+    activatedAt: firstValue(record, ["activated_at"]),
+    resolvedAt: firstValue(record, ["resolved_at"]),
+    resolution: parseJsonRecord(firstValue(record, ["resolution"])),
+    revertedAt: firstValue(record, ["reverted_at"]),
+  }
+}
+
+async function getRecipeEvents(env: Bindings, matchId: string): Promise<RecipeEventRecord[]> {
+  await ensureSheetWithHeaders(env, "item_events", ITEM_EVENT_HEADERS)
+  return sheetRowsToRecords(await getSheetValuesSafe(env, "item_events!A1:ZZ"))
+    .map(parseRecipeEventRecord)
+    .filter((event): event is RecipeEventRecord => event !== null && event.matchId === matchId)
+}
+
+async function appendSheetRecord(
+  env: Bindings,
+  sheetName: string,
+  headers: readonly string[],
+  values: Record<string, string>,
+): Promise<void> {
+  await ensureSheetWithHeaders(env, sheetName, headers)
+  const current = await getSheetValues(env, `${sheetName}!A1:ZZ1`)
+  const actualHeaders = current[0]?.map(normalizeHeader) ?? [...headers]
+  await appendSheetRow(env, sheetName, actualHeaders.map((header) => values[header] ?? ""))
+}
+
+async function updateSheetRecordFields(
+  env: Bindings,
+  sheetName: string,
+  idHeader: string,
+  id: string,
+  fields: Record<string, string>,
+): Promise<void> {
+  const values = await getSheetValues(env, `${sheetName}!A1:ZZ`)
+  const [rawHeaders, ...rows] = values
+  if (!rawHeaders) throw new Error(`${sheetName} sheet is empty`)
+  const headers = rawHeaders.map(normalizeHeader)
+  const idIndex = headers.indexOf(idHeader)
+  const rowIndex = rows.findIndex((row) => row[idIndex]?.trim() === id)
+  if (idIndex < 0 || rowIndex < 0) throw new Error(`Record ${id} not found in ${sheetName}`)
+  const rowNumber = rowIndex + 2
+  await batchUpdateValues(env, Object.entries(fields).map(([field, value]) => {
+    const column = headers.indexOf(normalizeHeader(field))
+    if (column < 0) throw new Error(`Column ${field} not found in ${sheetName}`)
+    return { range: `${sheetName}!${colLetter(column)}${rowNumber}`, values: [[value]] }
+  }))
+}
+
+async function updateRecipeEvent(
+  env: Bindings,
+  eventId: string,
+  fields: Record<string, string>,
+): Promise<void> {
+  await ensureSheetWithHeaders(env, "item_events", ITEM_EVENT_HEADERS)
+  await updateSheetRecordFields(env, "item_events", "event_id", eventId, fields)
+}
+
+function itemForEvent(items: SheetRecord[], event: RecipeEventRecord): SheetRecord | undefined {
+  return items.find((item) => firstValue(item, ["item_id", "id"]) === event.itemId)
+}
+
+function effectTypeForEvent(items: SheetRecord[], event: RecipeEventRecord): string {
+  const copied = typeof event.payload.copiedEffectType === "string" ? event.payload.copiedEffectType : ""
+  return copied || firstValue(itemForEvent(items, event) ?? {}, ["effect_type"])
+}
+
+function itemPayload(item: SheetRecord): Record<string, unknown> {
+  if (firstValue(item, ["item_id", "id"]) === "item_11") return { mod: "PS" }
+  return parseJsonRecord(firstValue(item, ["effect_payload", "payload"]))
+}
+
+async function getItemRecords(env: Bindings): Promise<SheetRecord[]> {
+  const records = sheetRowsToRecords(await getSheetValuesSafe(env, "items!A1:Z"))
+  for (const builtin of BUILTIN_ITEM_RECORDS) {
+    const itemId = firstValue(builtin, ["item_id"])
+    if (!records.some((record) => firstValue(record, ["item_id", "id"]) === itemId)) {
+      records.push(builtin)
+    }
+  }
+  return records
+}
+
+function recipeIdNumber(itemId: string): number {
+  return Number(itemId.replace(/^item_/, "")) || 0
+}
+
+function recipeCost(item: SheetRecord): InventoryMap {
+  return Object.fromEntries(INVENTORY_KEYS.map((key) => [
+    key,
+    Math.max(0, Number(firstValue(item, [`cost_${key}`, key])) || 0),
+  ])) as InventoryMap
+}
+
+function samePlayer(left?: string, right?: string): boolean {
+  return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase()
+}
+
+async function setMatchMapStatus(
+  env: Bindings,
+  matchId: string,
+  slot: string,
+  status: string,
+  player: string,
+  playerField?: "picked_by" | "banned_by",
+): Promise<void> {
+  const values = await getSheetValues(env, "match_maps!A1:Z")
+  const [rawHeaders, ...rows] = values
+  if (!rawHeaders) throw new Error("match_maps sheet is empty")
+  const headers = rawHeaders.map(normalizeHeader)
+  const matchIdIndex = headers.indexOf("match_id")
+  const slotIndex = headers.indexOf("slot")
+  const statusIndex = headers.indexOf("status")
+  if (matchIdIndex < 0 || slotIndex < 0 || statusIndex < 0) {
+    throw new Error("match_maps sheet missing match_id, slot, or status")
+  }
+  const rowIndex = rows.findIndex((row) =>
+    row[matchIdIndex]?.trim() === matchId &&
+    row[slotIndex]?.trim().toLowerCase() === slot.toLowerCase()
+  )
+  if (rowIndex >= 0) {
+    const rowNumber = rowIndex + 2
+    const writes = [
+      { range: `match_maps!${colLetter(statusIndex)}${rowNumber}`, values: [[status]] },
+    ]
+    if (playerField) {
+      const playerIndex = headers.indexOf(playerField)
+      if (playerIndex >= 0) {
+        writes.push({ range: `match_maps!${colLetter(playerIndex)}${rowNumber}`, values: [[player]] })
+      }
+    }
+    if (status === "available") {
+      for (const field of ["picked_by", "banned_by", "score_a", "score_b", "winner"]) {
+        const index = headers.indexOf(field)
+        if (index >= 0) writes.push({ range: `match_maps!${colLetter(index)}${rowNumber}`, values: [[""]] })
+      }
+    }
+    await batchUpdateValues(env, writes)
+    return
+  }
+
+  const record: Record<string, string> = {
+    match_id: matchId,
+    slot,
+    map_id: slot,
+    status,
+  }
+  if (playerField) record[playerField] = player
+  await appendSheetRow(env, "match_maps", headers.map((header) => record[header] ?? ""))
+}
+
+function publicRecipeEvent(event: RecipeEventRecord): Record<string, unknown> {
+  return {
+    id: event.id,
+    player: event.player,
+    recipeId: recipeIdNumber(event.itemId),
+    target: event.target || undefined,
+    payload: event.payload,
+    status: event.status,
+    createdAt: event.createdAt,
+    activatedAt: event.activatedAt || undefined,
+    resolvedAt: event.resolvedAt || undefined,
+    resolution: event.resolution,
+  }
+}
+
+function baseLobbyMods(pool: string, enforceNF: boolean): string {
+  const normalized = pool.trim().toUpperCase()
+  if (normalized === "FM" || normalized === "TB") return "Freemod"
+  if (normalized === "HR") return enforceNF ? "HRNF" : "HR"
+  if (normalized === "DT") return enforceNF ? "DTNF" : "DT"
+  return enforceNF ? "NF" : "None"
+}
+
+function addLobbyMod(base: string, mod: string, enforceNF: boolean): string {
+  if (base.toLowerCase() === "freemod") return "Freemod"
+  const codes: string[] = (base === "None" ? "" : base)
+    .replace(/NF/g, "")
+    .match(/[A-Z]{2}/g) ?? []
+  if (!codes.includes(mod)) codes.push(mod)
+  if (enforceNF && !codes.includes("NF")) codes.push("NF")
+  return codes.join("") || "None"
+}
+
+type RecipePickSetup = {
+  eventIds: string[]
+  mods: string
+  commandsBefore: string[]
+  notices: string[]
+}
+
+async function activateRecipesForPick(
+  env: Bindings,
+  matchId: string,
+  player: string,
+  slot: string,
+  pool: string,
+): Promise<RecipePickSetup> {
+  const [events, items, configMap] = await Promise.all([
+    getRecipeEvents(env, matchId),
+    getItemRecords(env),
+    getConfigMap(env),
+  ])
+  const active = events.filter((event) => {
+    if (event.status !== "active" || !samePlayer(event.player, player)) return false
+    const effectType = effectTypeForEvent(items, event)
+    if (effectType === "wildcard_slot") return samePlayer(event.target, slot)
+    return MAP_BOUND_EFFECTS.has(effectType) && (!event.target || samePlayer(event.target, slot))
+  })
+  const now = new Date().toISOString()
+  for (const event of active) {
+    if (!event.target || !event.activatedAt) {
+      await updateRecipeEvent(env, event.id, {
+        target: slot,
+        activated_at: event.activatedAt || now,
+      })
+      event.target = slot
+      event.activatedAt = event.activatedAt || now
+    }
+  }
+
+  const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
+  let mods = baseLobbyMods(pool, enforceNF)
+  const commandsBefore: string[] = []
+  const notices: string[] = []
+  const teamMode = teamModeToInt(configMap.get("team mode") ?? "")
+  const lobbySize = formatToLobbySize(configMap.get("format") ?? "1v1")
+
+  for (const event of active) {
+    const effectType = effectTypeForEvent(items, event)
+    const item = itemForEvent(items, event)
+    const payload = { ...itemPayload(item ?? {}), ...event.payload }
+    if (effectType === "mod_replace" && pool.toUpperCase() === "DT") {
+      mods = enforceNF ? "NCNF" : "NC"
+    } else if (effectType === "mod_add_self") {
+      mods = "Freemod"
+      notices.push(`${event.player} must use ${String(payload.mod ?? "")}; the opponent must not add a recipe mod.`)
+    } else if (effectType === "mod_add_both") {
+      mods = "Freemod"
+      notices.push(`Both players must use their selected Custard mods: ${String(payload.modA ?? payload.mod ?? "")} / ${String(payload.modB ?? payload.mod ?? "")}.`)
+    } else if (effectType === "mod_force_both") {
+      const forcedMod = String(payload.mod ?? "").toUpperCase()
+      if (forcedMod === "PS") {
+        mods = "Freemod"
+        notices.push("Quiche active: both players must enable PS for this map.")
+      } else if (forcedMod) {
+        mods = addLobbyMod(mods, forcedMod, enforceNF)
+      }
+    } else if (effectType === "accuracy_mode") {
+      commandsBefore.push(`!mp set ${teamMode} 1 ${lobbySize}`)
+    } else if (effectType === "scoring_mode") {
+      commandsBefore.push(`!mp set ${teamMode} 0 ${lobbySize}`)
+    }
+  }
+
+  return { eventIds: active.map((event) => event.id), mods, commandsBefore, notices }
 }
 
 function getMapPoolForSlot(poolRecords: SheetRecord[], slot: string): string {
@@ -1681,21 +2085,23 @@ app.post("/api/match/:matchId/score", async (c) => {
   }
 
   const slot = typeof body.slot === "string" ? body.slot.trim() : ""
-  const winner = typeof body.winner === "string" ? body.winner.trim() : ""
   const playerA = typeof body.playerA === "string" ? body.playerA.trim() : ""
   const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
-  const scoreA = Number(body.scoreA)
-  const scoreB = Number(body.scoreB)
-  if (!slot || !winner || !playerA || !playerB || !Number.isFinite(scoreA) || !Number.isFinite(scoreB)) {
-    return c.json({ error: "slot, winner, playerA, playerB, scoreA, and scoreB required" }, 400)
+  const rawScoreA = Number(body.scoreA)
+  const rawScoreB = Number(body.scoreB)
+  if (!slot || !playerA || !playerB || !Number.isFinite(rawScoreA) || !Number.isFinite(rawScoreB)) {
+    return c.json({ error: "slot, playerA, playerB, scoreA, and scoreB required" }, 400)
   }
-  if (winner !== playerA && winner !== playerB) {
-    return c.json({ error: "winner must be one of the match players" }, 400)
-  }
-
 
   try {
     const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    if (!samePlayer(playerA, match.playerA) || !samePlayer(playerB, match.playerB)) {
+      return c.json({ error: "Score players must match player A and player B for this match" }, 400)
+    }
+    if (rawScoreA < 0 || rawScoreB < 0) {
+      return c.json({ error: "Scores cannot be negative" }, 400)
+    }
     const matchMapsValues = await getSheetValues(c.env, "match_maps!A1:Z")
     const [headers, ...rows] = matchMapsValues
     if (!headers) return c.json({ error: "match_maps sheet empty" }, 500)
@@ -1712,6 +2118,92 @@ app.post("/api/match/:matchId/score", async (c) => {
     const beforeRow = existingRowIdx >= 0 ? rows[existingRowIdx] : undefined
     const beforeJson = beforeRow ? JSON.stringify(beforeRow) : "{}"
     const wasCompleted = beforeRow?.[statusIdx]?.trim().toLowerCase() === "completed"
+    if (wasCompleted) return c.json({ error: "This map result is already completed" }, 409)
+
+    const [recipeEvents, items, poolValues, configMap, flowBefore] = await Promise.all([
+      getRecipeEvents(c.env, matchId),
+      getItemRecords(c.env),
+      getSheetValuesSafe(c.env, "mappool!A1:Z"),
+      getConfigMap(c.env),
+      getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl)),
+    ])
+    const activeEvents = recipeEvents.filter((event) =>
+      event.status === "active" && samePlayer(event.target, slot)
+    )
+    const effect = (event: RecipeEventRecord): string => effectTypeForEvent(items, event)
+    const payloadFor = (event: RecipeEventRecord): Record<string, unknown> => ({
+      ...itemPayload(itemForEvent(items, event) ?? {}),
+      ...event.payload,
+    })
+
+    const applyScoreEffects = (inputA: number, inputB: number): { scoreA: number; scoreB: number } => {
+      let scoreA = inputA
+      let scoreB = inputB
+      for (const event of activeEvents) {
+        if (effect(event) !== "score_add") continue
+        const amount = Number(payloadFor(event).amount) || 0
+        if (samePlayer(event.player, playerA)) scoreA += amount
+        if (samePlayer(event.player, playerB)) scoreB += amount
+      }
+      for (const event of activeEvents) {
+        if (effect(event) !== "score_multiply") continue
+        const multiplier = Number(payloadFor(event).multiplier) || 1
+        if (samePlayer(event.player, playerA)) scoreA = Math.round(scoreA * multiplier)
+        if (samePlayer(event.player, playerB)) scoreB = Math.round(scoreB * multiplier)
+      }
+      return { scoreA, scoreB }
+    }
+
+    const currentAdjusted = applyScoreEffects(rawScoreA, rawScoreB)
+    const replayEvents = activeEvents.filter((event) =>
+      effect(event) === "replay_top_score" || effect(event) === "conditional_replay"
+    )
+    const storedReplay = replayEvents
+      .map((event) => toRecord(event.resolution.firstRun))
+      .find((run) => run && Number.isFinite(Number(run.scoreA)) && Number.isFinite(Number(run.scoreB)))
+    const bananaBreadActive = replayEvents.some((event) => effect(event) === "replay_top_score")
+    const bubbleTeaEligible = replayEvents.some((event) => {
+      if (effect(event) !== "conditional_replay") return false
+      const maxGap = Number(payloadFor(event).max_gap ?? payloadFor(event).maxGap ?? 10_000) || 10_000
+      return Math.abs(currentAdjusted.scoreA - currentAdjusted.scoreB) <= maxGap
+    })
+
+    if (!storedReplay && (bananaBreadActive || bubbleTeaEligible)) {
+      const now = new Date().toISOString()
+      for (const event of replayEvents) {
+        if (effect(event) === "replay_top_score" || bubbleTeaEligible) {
+          await updateRecipeEvent(c.env, event.id, {
+            activated_at: event.activatedAt || now,
+            resolution: JSON.stringify({
+              ...event.resolution,
+              firstRun: { scoreA: rawScoreA, scoreB: rawScoreB },
+              replayReason: effect(event),
+            }),
+          })
+        }
+      }
+      return c.json({
+        ok: true,
+        replayRequired: true,
+        slot,
+        rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
+        adjustedScores: currentAdjusted,
+        state: flowBefore,
+        notices: ["Replay this map. Active map recipes remain applied for the replay."],
+      })
+    }
+
+    let scoreA = currentAdjusted.scoreA
+    let scoreB = currentAdjusted.scoreB
+    if (storedReplay && bananaBreadActive) {
+      const firstAdjusted = applyScoreEffects(Number(storedReplay.scoreA), Number(storedReplay.scoreB))
+      scoreA = Math.max(firstAdjusted.scoreA, currentAdjusted.scoreA)
+      scoreB = Math.max(firstAdjusted.scoreB, currentAdjusted.scoreB)
+    }
+    if (scoreA === scoreB) return c.json({ error: "Adjusted scores are tied; resolve the tie before submitting" }, 409)
+    const winner = scoreA > scoreB ? playerA : playerB
+    const loser = samePlayer(winner, playerA) ? playerB : playerA
+    const margin = Math.abs(scoreA - scoreB)
 
     if (existingRowIdx >= 0) {
       const rowNum = existingRowIdx + 2
@@ -1739,15 +2231,93 @@ app.post("/api/match/:matchId/score", async (c) => {
       scoreB: countCompletedWins(matchMapRecordsBefore, matchId, playerB) + (!wasCompleted && winner === playerB ? 1 : 0),
     }
 
-    const poolRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "mappool!A1:Z"))
+    const poolRecords = sheetRowsToRecords(poolValues)
     const pool = getMapPoolForSlot(poolRecords, slot)
     const ingredient = POOL_TO_INGREDIENT[pool]
-    let inventory: InventoryMap | undefined
-    if (ingredient && !wasCompleted) {
-      inventory = await applyInventoryDelta(c.env, matchId, winner, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "map_win_ingredient")
+    if (ingredient) {
+      await applyInventoryDelta(c.env, matchId, winner, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "map_win_ingredient")
     }
 
-    const winsNeeded = Math.ceil((match?.bestOf ?? 5) / 2)
+    const now = new Date().toISOString()
+    const restoreCommands: string[] = []
+    const teamMode = teamModeToInt(configMap.get("team mode") ?? "")
+    const scoringMode = scoringModeToInt(configMap.get("scoring") ?? "")
+    const lobbySize = formatToLobbySize(configMap.get("format") ?? "1v1")
+
+    for (const event of activeEvents) {
+      const effectType = effect(event)
+      const payload = payloadFor(event)
+      const resolution: Record<string, unknown> = {
+        ...event.resolution,
+        slot,
+        rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
+        finalScores: { scoreA, scoreB },
+        winner,
+      }
+
+      if (effectType === "win_bonus_steal") {
+        const selected = String(payload.ingredient ?? "") as IngredientKey
+        const threshold = Number(payload.threshold) || 200_000
+        if (samePlayer(event.player, winner) && margin > threshold && INVENTORY_KEYS.includes(selected)) {
+          await applyInventoryDelta(c.env, matchId, loser, { [selected]: -1 }, sessionUser?.username ?? "unknown", "dough_steal")
+          resolution.stolenIngredient = selected
+        } else {
+          resolution.triggered = false
+        }
+      } else if (effectType === "home_base_ingredient") {
+        const homeMod = samePlayer(event.player, match.playerA) ? flowBefore.homeModA : flowBefore.homeModB
+        const homeIngredient = homeMod ? POOL_TO_INGREDIENT[homeMod] : undefined
+        if (homeIngredient && homeMod !== pool.toUpperCase()) {
+          await applyInventoryDelta(c.env, matchId, event.player, { [homeIngredient]: 1 }, sessionUser?.username ?? "unknown", "hot_chocolate_bonus")
+          resolution.bonusIngredient = homeIngredient
+        } else {
+          resolution.triggered = false
+        }
+      } else if (effectType === "comeback_bonus") {
+        if (ingredient && samePlayer(event.player, winner)) {
+          await applyInventoryDelta(c.env, matchId, event.player, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "shortbread_bonus")
+          resolution.bonusIngredient = ingredient
+        } else {
+          resolution.triggered = false
+        }
+      } else if (effectType === "wildcard_slot") {
+        const rewards = Array.isArray(payload.rewardIngredients) ? payload.rewardIngredients : []
+        const delta: Partial<InventoryMap> = {}
+        for (const raw of rewards) {
+          const reward = String(raw) as IngredientKey
+          if (INVENTORY_KEYS.includes(reward)) delta[reward] = (delta[reward] ?? 0) + 1
+        }
+        if (Object.keys(delta).length > 0) {
+          await applyInventoryDelta(c.env, matchId, winner, delta, sessionUser?.username ?? "unknown", "caramel_reward")
+          resolution.rewardIngredients = rewards
+        }
+      }
+
+      if (effectType === "accuracy_mode" || effectType === "scoring_mode") {
+        const restore = `!mp set ${teamMode} ${scoringMode} ${lobbySize}`
+        if (!restoreCommands.includes(restore)) restoreCommands.push(restore)
+      }
+
+      await updateRecipeEvent(c.env, event.id, {
+        status: "resolved",
+        resolved_at: now,
+        resolution: JSON.stringify(resolution),
+      })
+    }
+
+    const inventoryRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "inventory!A1:Z"))
+    const inventories = {
+      a: parseInventoryRecord(inventoryRecords.find((record) =>
+        firstValue(record, ["match_id"]) === matchId &&
+        samePlayer(firstValue(record, ["player", "player_id"]), playerA)
+      )),
+      b: parseInventoryRecord(inventoryRecords.find((record) =>
+        firstValue(record, ["match_id"]) === matchId &&
+        samePlayer(firstValue(record, ["player", "player_id"]), playerB)
+      )),
+    }
+
+    const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
     const matchOver = totals.scoreA >= winsNeeded || totals.scoreB >= winsNeeded
     const flowState = await writeMatchFlowState(c.env, {
       ...(await getMatchFlowState(c.env, matchId, Boolean(match?.lobbyUrl))),
@@ -1763,10 +2333,22 @@ app.post("/api/match/:matchId/score", async (c) => {
       "match_map",
       `${matchId}:${slot}`,
       beforeJson,
-      JSON.stringify({ slot, scoreA, scoreB, winner, status: "completed", pool, ingredient }),
+      JSON.stringify({ slot, rawScoreA, rawScoreB, scoreA, scoreB, winner, status: "completed", pool, ingredient }),
     ).catch(() => {})
 
-    return c.json({ ok: true, slot, scoreA, scoreB, winner, totals, pool, ingredient, inventory, state: flowState })
+    return c.json({
+      ok: true,
+      slot,
+      scoreA,
+      scoreB,
+      winner,
+      totals,
+      pool,
+      ingredient,
+      inventories,
+      state: flowState,
+      restoreCommands,
+    })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Score update failed" }, 500)
   }
@@ -1791,17 +2373,22 @@ async function buildAndPostResultEmbed(
   const lobbyUrl     = match?.lobbyUrl ?? ""
   const mpId         = lobbyUrl.match(/\/mp\/(\d+)/)?.[1] ?? (/^\d+$/.test(lobbyUrl.trim()) ? lobbyUrl.trim() : undefined)
 
-  const [matchMapValues, itemEventValues, itemValues] = await Promise.all([
+  const [matchMapValues, itemEventValues, itemRecords] = await Promise.all([
     getSheetValuesSafe(env, "match_maps!A1:Z"),
-    getSheetValuesSafe(env, "item_events!A1:Z"),
-    getSheetValuesSafe(env, "items!A1:Z"),
+    getSheetValuesSafe(env, "item_events!A1:ZZ"),
+    getItemRecords(env),
   ])
   const matchMaps   = sheetRowsToRecords(matchMapValues)
     .filter((r) => firstValue(r, ["match_id"]) === matchId)
   const itemEvents  = sheetRowsToRecords(itemEventValues)
-    .filter((r) => firstValue(r, ["match_id"]) === matchId && firstValue(r, ["action"]) === "use")
+    .filter((r) =>
+      firstValue(r, ["match_id"]) === matchId &&
+      firstValue(r, ["action"]) === "use" &&
+      !firstValue(r, ["reverted_at"]) &&
+      firstValue(r, ["status"]).toLowerCase() !== "reverted"
+    )
   const itemNameMap = new Map<string, string>()
-  for (const r of sheetRowsToRecords(itemValues)) {
+  for (const r of itemRecords) {
     const id   = firstValue(r, ["item_id", "id"])
     const name = firstValue(r, ["name"])
     if (id && name) itemNameMap.set(id, name)
@@ -1873,11 +2460,11 @@ async function buildAndPostResultEmbed(
 
   // Recipes used grouped by player
   const recipesA = itemEvents
-    .filter((r) => firstValue(r, ["player"]).toLowerCase() === playerA.toLowerCase())
+    .filter((r) => firstValue(r, ["player_id", "player"]).toLowerCase() === playerA.toLowerCase())
     .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
     .filter(Boolean)
   const recipesB = itemEvents
-    .filter((r) => firstValue(r, ["player"]).toLowerCase() === playerB.toLowerCase())
+    .filter((r) => firstValue(r, ["player_id", "player"]).toLowerCase() === playerB.toLowerCase())
     .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
     .filter(Boolean)
   const recipesValue = [
@@ -1973,6 +2560,16 @@ app.post("/api/match/:matchId/post-result", async (c) => {
   }
 })
 
+app.get("/api/match/:matchId/recipes", async (c) => {
+  const matchId = c.req.param("matchId")
+  try {
+    const events = await getRecipeEvents(c.env, matchId)
+    return c.json({ events: events.map(publicRecipeEvent) })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to load recipe events" }, 500)
+  }
+})
+
 app.post("/api/match/:matchId/recipe", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
@@ -1986,12 +2583,16 @@ app.post("/api/match/:matchId/recipe", async (c) => {
 
   const player = typeof body.player === "string" ? body.player.trim() : ""
   const recipeIdRaw = String(body.recipeId ?? "").trim()
-  const target = typeof body.target === "string" ? body.target.trim() : ""
   if (!player || !recipeIdRaw) return c.json({ error: "player and recipeId required" }, 400)
 
-
   try {
-    const itemRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "items!A1:Z"))
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    if (!samePlayer(player, match.playerA) && !samePlayer(player, match.playerB)) {
+      return c.json({ error: "Player must belong to this match" }, 400)
+    }
+    const opponent = opponentOf(player, match.playerA, match.playerB)
+    const itemRecords = await getItemRecords(c.env)
     const recipeId = recipeIdRaw.startsWith("item_") ? recipeIdRaw : `item_${recipeIdRaw}`
     const item = itemRecords.find((record) => firstValue(record, ["item_id", "id"]) === recipeId)
     if (!item) return c.json({ error: "Recipe not found" }, 404)
@@ -2003,53 +2604,193 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       (timing === "ban_phase" && flowState.phase === "ban") ||
       (timing === "pick_phase" && flowState.phase === "craft") ||
       (timing === "before_map" && flowState.phase === "craft") ||
-      (timing === "after_score" && (flowState.phase === "craft" || flowState.phase === "ready_result"))
+      (timing === "after_score" && flowState.phase === "play")
     if (!timingOpen) {
       return c.json({ error: `${firstValue(item, ["name"]) || "Recipe"} cannot be used during ${flowState.phase}` }, 409)
     }
 
-    const cost = Object.fromEntries(INVENTORY_KEYS.map((key) => [
-      key,
-      Math.max(0, Number(firstValue(item, [`cost_${key}`, key])) || 0),
-    ])) as InventoryMap
+    const events = await getRecipeEvents(c.env, matchId)
+    if (events.some((event) =>
+      event.status === "active" &&
+      event.itemId === recipeId &&
+      samePlayer(event.player, player)
+    )) {
+      return c.json({ error: "This recipe already has an active effect for the player" }, 409)
+    }
+
+    const baseEffectType = firstValue(item, ["effect_type"])
+    let effectType = baseEffectType
+    let effectPayload = itemPayload(item)
+    let target = typeof body.targetSlot === "string" ? body.targetSlot.trim() : ""
+    const activationPayload: Record<string, unknown> = {}
+
+    if (baseEffectType === "copy_last_opponent") {
+      const sourceEvent = [...events].reverse().find((event) =>
+        event.status !== "reverted" &&
+        samePlayer(event.player, opponent) &&
+        event.itemId !== "item_18"
+      )
+      if (!sourceEvent) return c.json({ error: "Opponent has no recipe effect to copy" }, 409)
+      const sourceItem = itemForEvent(itemRecords, sourceEvent)
+      if (!sourceItem) return c.json({ error: "Opponent recipe definition is missing" }, 409)
+      effectType = effectTypeForEvent(itemRecords, sourceEvent)
+      if (!MAP_BOUND_EFFECTS.has(effectType) && effectType !== "wildcard_slot") {
+        return c.json({ error: "Opponent's last recipe effect cannot be copied in the current flow" }, 409)
+      }
+      effectPayload = { ...itemPayload(sourceItem), ...sourceEvent.payload }
+      activationPayload.copiedEffectType = effectType
+      activationPayload.copiedFromEventId = sourceEvent.id
+      activationPayload.copiedFromItemId = sourceEvent.itemId
+    }
+
+    const mod = typeof body.mod === "string"
+      ? body.mod.trim().toUpperCase()
+      : String(effectPayload.mod ?? "").toUpperCase()
+    if (effectType === "mod_add_self") {
+      if (!RECIPE_MOD_CHOICES.includes(mod as typeof RECIPE_MOD_CHOICES[number])) {
+        return c.json({ error: `mod must be one of ${RECIPE_MOD_CHOICES.join(", ")}` }, 400)
+      }
+      activationPayload.mod = mod
+    }
+    if (effectType === "mod_add_both") {
+      const modA = typeof body.modA === "string" ? body.modA.trim().toUpperCase() : String(effectPayload.modA ?? "").toUpperCase()
+      const modB = typeof body.modB === "string" ? body.modB.trim().toUpperCase() : String(effectPayload.modB ?? "").toUpperCase()
+      if (
+        !RECIPE_MOD_CHOICES.includes(modA as typeof RECIPE_MOD_CHOICES[number]) ||
+        !RECIPE_MOD_CHOICES.includes(modB as typeof RECIPE_MOD_CHOICES[number])
+      ) {
+        return c.json({ error: `Both player mods must be one of ${RECIPE_MOD_CHOICES.join(", ")}` }, 400)
+      }
+      activationPayload.modA = modA
+      activationPayload.modB = modB
+    }
+
+    if (timing === "after_score") {
+      target = flowState.currentSlot ?? ""
+      if (!target) return c.json({ error: "No map is currently awaiting a score" }, 409)
+    }
+
+    const ingredientRaw = typeof body.ingredient === "string"
+      ? body.ingredient.trim().toLowerCase()
+      : String(effectPayload.ingredient ?? "").toLowerCase()
+    const ingredient = INVENTORY_KEYS.find((key) => key === ingredientRaw)
+    if (effectType === "steal_ingredient" || effectType === "win_bonus_steal") {
+      if (!ingredient) return c.json({ error: "A valid ingredient selection is required" }, 400)
+      activationPayload.ingredient = ingredient
+    }
+
+    const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
+    const poolRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "mappool!A1:Z"))
+    const matchPoolRecords = match.mappool
+      ? poolRecords.filter((record) => firstValue(record, ["round"]).toLowerCase() === match.mappool?.toLowerCase())
+      : poolRecords
+    const validSlots = new Set(matchPoolRecords.map((record) => firstValue(record, ["map_id", "slot"]).toLowerCase()))
+    const mapStatus = (slot: string): string => {
+      const record = matchMapRecords.find((candidate) =>
+        firstValue(candidate, ["match_id"]) === matchId &&
+        firstValue(candidate, ["slot", "map_id"]).toLowerCase() === slot.toLowerCase()
+      )
+      return firstValue(record ?? {}, ["status"]).toLowerCase() || "available"
+    }
+
+    if (effectType === "protect_map") {
+      if (!target || !validSlots.has(target.toLowerCase())) return c.json({ error: "Select a valid map to protect" }, 400)
+      if (mapStatus(target) !== "available") return c.json({ error: "Only an available map can be protected" }, 409)
+    }
+    if (effectType === "unban_map") {
+      if (!target || !validSlots.has(target.toLowerCase())) return c.json({ error: "Select a valid banned map" }, 400)
+      if (mapStatus(target) !== "banned") return c.json({ error: "Only a banned map can be unbanned" }, 409)
+    }
+
+    if (effectType === "wildcard_slot") {
+      const rewardSource = Array.isArray(body.rewardIngredients)
+        ? body.rewardIngredients.map((value) => String(value).trim().toLowerCase())
+        : Array.isArray(effectPayload.rewardIngredients)
+          ? effectPayload.rewardIngredients.map((value) => String(value).trim().toLowerCase())
+          : []
+      const rewards = rewardSource
+      if (rewards.length !== 2 || rewards.some((value) => !INVENTORY_KEYS.includes(value as IngredientKey))) {
+        return c.json({ error: "Choose exactly two wildcard reward ingredients" }, 400)
+      }
+      const wildcard = matchPoolRecords.find((record) => {
+        const slot = firstValue(record, ["map_id", "slot"])
+        return firstValue(record, ["mod_pool", "pool"]).toUpperCase() === "TB" && mapStatus(slot) === "available"
+      })
+      target = firstValue(wildcard ?? {}, ["map_id", "slot"])
+      if (!target) return c.json({ error: "No available wildcard/TB slot exists in this mappool" }, 409)
+      activationPayload.rewardIngredients = rewards
+      activationPayload.wildcardSlot = target
+    }
+
+    if (effectType === "comeback_bonus") {
+      const scoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
+      const scoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
+      const playerScore = samePlayer(player, match.playerA) ? scoreA : scoreB
+      const opponentScore = samePlayer(player, match.playerA) ? scoreB : scoreA
+      const minDeficit = Number(effectPayload.min_deficit ?? effectPayload.minDeficit ?? 2) || 2
+      if (opponentScore - playerScore < minDeficit) {
+        return c.json({ error: `Shortbread requires the player to be at least ${minDeficit} points behind` }, 409)
+      }
+      activationPayload.activatedAtScore = { player: playerScore, opponent: opponentScore }
+    }
+
+    const cost = recipeCost(item)
     const inventoryRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "inventory!A1:Z"))
     const current = parseInventoryRecord(inventoryRecords.find((record) =>
       firstValue(record, ["match_id"]) === matchId &&
-      firstValue(record, ["player"]).toLowerCase() === player.toLowerCase()
+      samePlayer(firstValue(record, ["player", "player_id"]), player)
     ))
     const missing = INVENTORY_KEYS.filter((key) => current[key] < cost[key])
     if (missing.length > 0) return c.json({ error: "Not enough ingredients", missing }, 409)
 
+    if (effectType === "steal_ingredient" && ingredient) {
+      const opponentInventory = parseInventoryRecord(inventoryRecords.find((record) =>
+        firstValue(record, ["match_id"]) === matchId &&
+        samePlayer(firstValue(record, ["player", "player_id"]), opponent)
+      ))
+      if (opponentInventory[ingredient] < 1) {
+        return c.json({ error: `${opponent} has no ${ingredient} to steal` }, 409)
+      }
+    }
+
     const next = { ...current }
     for (const key of INVENTORY_KEYS) next[key] -= cost[key]
-    const inventory = await writeInventoryAbsolute(c.env, matchId, player, next, sessionUser?.username ?? "unknown", "recipe_cost")
+    let inventory = await writeInventoryAbsolute(c.env, matchId, player, next, sessionUser?.username ?? "unknown", "recipe_cost")
     const eventId = randomHex(8)
-    const effectType = firstValue(item, ["effect_type"])
-    const effectPayload = firstValue(item, ["effect_payload", "payload"]) || "{}"
-    await ensureSheetWithHeaders(c.env, "item_events", [
-      "event_id",
-      "match_id",
-      "player",
-      "item_id",
-      "action",
-      "target",
-      "payload",
-      "created_by",
-      "created_at",
-      "reverted_at",
-    ])
-    await appendSheetRow(c.env, "item_events", [
-      eventId,
-      matchId,
-      player,
-      recipeId,
-      "use",
+    const now = new Date().toISOString()
+    const immediate = ["none", "protect_map", "unban_map", "steal_ingredient"].includes(effectType)
+    const payload = { ...effectPayload, ...activationPayload }
+    const resolution: Record<string, unknown> = {}
+
+    if (effectType === "protect_map") {
+      await setMatchMapStatus(c.env, matchId, target, "protected", player)
+      resolution.protectedSlot = target
+    } else if (effectType === "unban_map") {
+      await setMatchMapStatus(c.env, matchId, target, "available", player)
+      resolution.unbannedSlot = target
+    } else if (effectType === "steal_ingredient" && ingredient) {
+      await applyInventoryDelta(c.env, matchId, opponent, { [ingredient]: -1 }, sessionUser?.username ?? "unknown", "recipe_steal_loss")
+      inventory = await applyInventoryDelta(c.env, matchId, player, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "recipe_steal_gain")
+      resolution.stolenIngredient = ingredient
+      resolution.from = opponent
+    }
+
+    await appendSheetRecord(c.env, "item_events", ITEM_EVENT_HEADERS, {
+      event_id: eventId,
+      match_id: matchId,
+      player_id: player,
+      item_id: recipeId,
+      action: "use",
       target,
-      effectPayload,
-      sessionUser?.username ?? "unknown",
-      new Date().toISOString(),
-      "",
-    ])
+      payload: JSON.stringify(payload),
+      created_by: sessionUser?.username ?? "unknown",
+      created_at: now,
+      reverted_at: "",
+      status: immediate ? "resolved" : "active",
+      activated_at: immediate ? now : "",
+      resolved_at: immediate ? now : "",
+      resolution: JSON.stringify(resolution),
+    })
     await appendAuditLog(
       c.env,
       sessionUser?.username ?? "unknown",
@@ -2057,11 +2798,73 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       "item_event",
       eventId,
       JSON.stringify({ inventory: current }),
-      JSON.stringify({ recipeId, player, target, effectType, effectPayload, inventory }),
+      JSON.stringify({ recipeId, player, target, effectType, payload, status: immediate ? "resolved" : "active", inventory }),
     ).catch(() => {})
-    return c.json({ ok: true, eventId, recipeId, player, target, effectType, effectPayload, inventory })
+    return c.json({
+      ok: true,
+      event: {
+        id: eventId,
+        player,
+        recipeId: recipeIdNumber(recipeId),
+        target: target || undefined,
+        payload,
+        status: immediate ? "resolved" : "active",
+        createdAt: now,
+        activatedAt: immediate ? now : undefined,
+        resolvedAt: immediate ? now : undefined,
+        resolution,
+      },
+      inventory,
+    })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Recipe use failed" }, 500)
+  }
+})
+
+app.delete("/api/match/:matchId/recipe/:eventId", async (c) => {
+  const matchId = c.req.param("matchId")
+  const eventId = c.req.param("eventId")
+  const sessionUser = await readSessionUser(c)
+  try {
+    const [events, items] = await Promise.all([
+      getRecipeEvents(c.env, matchId),
+      getItemRecords(c.env),
+    ])
+    const event = events.find((candidate) => candidate.id === eventId)
+    if (!event) return c.json({ error: "Recipe event not found" }, 404)
+    if (event.status !== "active") return c.json({ error: "Only active recipe effects can be reverted" }, 409)
+    if (event.activatedAt) return c.json({ error: "An activated map effect cannot be reverted" }, 409)
+    const item = itemForEvent(items, event)
+    if (!item) return c.json({ error: "Recipe definition not found" }, 404)
+
+    const refund = recipeCost(item)
+    const inventory = await applyInventoryDelta(
+      c.env,
+      matchId,
+      event.player,
+      refund,
+      sessionUser?.username ?? "unknown",
+      "recipe_refund",
+    )
+    const now = new Date().toISOString()
+    await updateRecipeEvent(c.env, event.id, {
+      status: "reverted",
+      reverted_at: now,
+      resolved_at: now,
+      resolution: JSON.stringify({ reverted: true, refunded: refund }),
+    })
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      "recipe_revert",
+      "item_event",
+      event.id,
+      JSON.stringify(publicRecipeEvent(event)),
+      JSON.stringify({ status: "reverted", refunded: refund }),
+    ).catch(() => {})
+    return c.json({ ok: true, inventory })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Recipe revert failed" }, 500)
   }
 })
 
@@ -2233,7 +3036,11 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     const fakeFollowUpCmds: string[] = [`!mp set ${teamMode} ${scoringMode} ${lobbySize}`]
     if (enforceNF) fakeFollowUpCmds.push("!mp mods NF")
     if (refUsername) fakeFollowUpCmds.push(`!mp addref ${refUsername}`)
-    try { await updateMatchField(c.env, matchId, "lobby_url", fakeLobbyUrl) } catch {}
+    try {
+      await updateMatchField(c.env, matchId, "lobby_url", fakeLobbyUrl)
+    } catch {
+      // Test-mode lobby creation remains usable when the Sheet write is unavailable.
+    }
     if (staffWebhook) {
       await fetch(staffWebhook, {
         method: "POST",
@@ -2514,7 +3321,11 @@ app.post("/api/match/:matchId/join-lobby", async (c) => {
 
   // #TEST-MODE-START — skip IRC alive check, sheet write still runs below
   if (isTestMode(joinCfgMap)) {
-    try { await updateMatchField(c.env, matchId, "lobby_url", lobbyUrl) } catch {}
+    try {
+      await updateMatchField(c.env, matchId, "lobby_url", lobbyUrl)
+    } catch {
+      // Test-mode lobby joining remains usable when the Sheet write is unavailable.
+    }
     return c.json({ ok: true, alive: true, lobbyUrl, channel })
   }
   // #TEST-MODE-END
@@ -2595,8 +3406,14 @@ app.post("/api/match/:matchId/action", async (c) => {
   try {
     const match = await getMatchById(c.env, matchId)
     if (!match) return c.json({ error: "Match not found" }, 404)
-    const flowState = manualOrder && action !== "unpick" ? undefined : await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
-    const samePlayer = (a?: string, b?: string) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase()
+    if (
+      action !== "unpick" &&
+      !samePlayer(actionPlayer, match.playerA) &&
+      !samePlayer(actionPlayer, match.playerB)
+    ) {
+      return c.json({ error: "Player must belong to this match" }, 400)
+    }
+    const flowState = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
 
     if (!manualOrder && flowState && action === "ban") {
       if (flowState.phase !== "ban") {
@@ -2639,6 +3456,19 @@ app.post("/api/match/:matchId/action", async (c) => {
     const existingRow = existingRowIdx >= 0 ? rows[existingRowIdx] : undefined
     const beforeJson = existingRow ? JSON.stringify(existingRow) : "{}"
     const beforePickedBy = existingRow?.[pickedByIdx]?.trim() || undefined
+    const existingStatus = existingRow?.[statusIdx]?.trim().toLowerCase() || "available"
+    if (action === "ban" && existingStatus === "protected") {
+      return c.json({ error: `${slot} is protected and cannot be banned` }, 409)
+    }
+    if (action === "ban" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
+      return c.json({ error: `${slot} is not available to ban` }, 409)
+    }
+    if (action === "pick" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
+      return c.json({ error: `${slot} is not available to pick` }, 409)
+    }
+    if (action === "protect" && existingStatus !== "available") {
+      return c.json({ error: `${slot} is not available to protect` }, 409)
+    }
 
     if (existingRowIdx >= 0) {
       const sheetRow = existingRowIdx + 2
@@ -2669,7 +3499,33 @@ app.post("/api/match/:matchId/action", async (c) => {
     }
 
     let nextFlowState: MatchFlowState | undefined
+    let recipeSetup: RecipePickSetup | undefined
     if (!manualOrder && flowState && action === "ban") {
+      const [recipeEvents, recipeItems] = await Promise.all([
+        getRecipeEvents(c.env, matchId),
+        getItemRecords(c.env),
+      ])
+      const extraBan = recipeEvents.find((event) =>
+        event.status === "active" &&
+        samePlayer(event.player, actionPlayer) &&
+        effectTypeForEvent(recipeItems, event) === "extra_ban"
+      )
+      if (extraBan) {
+        const now = new Date().toISOString()
+        await updateRecipeEvent(c.env, extraBan.id, {
+          status: "resolved",
+          target: slot,
+          activated_at: extraBan.activatedAt || now,
+          resolved_at: now,
+          resolution: JSON.stringify({ extraBanAfter: slot }),
+        })
+        nextFlowState = await writeMatchFlowState(c.env, {
+          ...flowState,
+          phase: "ban",
+          turnPlayer: actionPlayer,
+          currentSlot: undefined,
+        })
+      }
       const mapRecords = sheetRowsToRecords(matchMapsValues)
       const completedBans = mapRecords.filter((r) =>
         firstValue(r, ["match_id"]) === matchId &&
@@ -2678,7 +3534,9 @@ app.post("/api/match/:matchId/action", async (c) => {
       const firstBanner = flowState.firstBanner ?? actionPlayer
       const secondBanner = opponentOf(firstBanner, match.playerA, match.playerB)
       const banOrder = orderedPlayersFromPattern(actionCfgMap.get("ban order") ?? DEFAULT_BAN_ORDER, firstBanner, secondBanner)
-      if (completedBans < banOrder.length) {
+      if (extraBan) {
+        // Beignets grants the acting player one immediate additional ban.
+      } else if (completedBans < banOrder.length) {
         nextFlowState = await writeMatchFlowState(c.env, {
           ...flowState,
           phase: "ban",
@@ -2693,13 +3551,18 @@ app.post("/api/match/:matchId/action", async (c) => {
           currentSlot: undefined,
         })
       }
-    } else if (!manualOrder && flowState && action === "pick") {
-      nextFlowState = await writeMatchFlowState(c.env, {
-        ...flowState,
-        phase: "play",
-        turnPlayer: actionPlayer,
-        currentSlot: slot,
-      })
+    } else if (action === "pick") {
+      const poolRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "mappool!A1:Z"))
+      const pool = getMapPoolForSlot(poolRecords, slot)
+      recipeSetup = await activateRecipesForPick(c.env, matchId, actionPlayer, slot, pool)
+      if (flowState) {
+        nextFlowState = await writeMatchFlowState(c.env, {
+          ...flowState,
+          phase: "play",
+          turnPlayer: actionPlayer,
+          currentSlot: slot,
+        })
+      }
     } else if (flowState && action === "unpick" && flowState.currentSlot === slot) {
       nextFlowState = await writeMatchFlowState(c.env, {
         ...flowState,
@@ -2720,7 +3583,7 @@ app.post("/api/match/:matchId/action", async (c) => {
       JSON.stringify(afterState),
     ).catch(() => {})
 
-    return c.json({ ok: true, slot, action, player, status, state: nextFlowState, manualOrder })
+    return c.json({ ok: true, slot, action, player, status, state: nextFlowState, manualOrder, recipeSetup })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Action failed" }, 500)
   }

@@ -3,6 +3,8 @@ export type MapStatus = "available" | "picked" | "banned" | "protected" | "in-pr
 export type MatchStatus = "scheduled" | "upcoming" | "live" | "completed" | "forfeit"
 export type IngKey = "egg" | "sugar" | "butter" | "flour" | "milk"
 export type Inventory = Record<IngKey, number>
+export type RecipeEventStatus = "active" | "resolved" | "reverted"
+export type RecipeInputKind = "mod" | "mods_both" | "protect_map" | "unban_map" | "ingredient" | "reward_ingredients"
 export type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
 export type MatchFlowPhase =
   | "lobby"
@@ -35,6 +37,30 @@ export interface Recipe {
   desc: string
   cost: Partial<Inventory>
   timing: string
+  effectType: string
+  inputs?: RecipeInputKind[]
+}
+
+export interface RecipeActivation {
+  mod?: string
+  modA?: string
+  modB?: string
+  targetSlot?: string
+  ingredient?: IngKey
+  rewardIngredients?: [IngKey, IngKey]
+}
+
+export interface RecipeEvent {
+  id: string
+  player: string
+  recipeId: number
+  target?: string
+  payload: Record<string, unknown>
+  status: RecipeEventStatus
+  createdAt: string
+  activatedAt?: string
+  resolvedAt?: string
+  resolution?: Record<string, unknown>
 }
 
 export interface MatchFlowState {

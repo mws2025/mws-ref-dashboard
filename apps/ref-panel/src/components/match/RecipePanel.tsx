@@ -1,9 +1,28 @@
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { INGREDIENTS } from "@/data/constants"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
-import type { IngKey, Inventory, MatchFlowPhase, Recipe } from "@/types"
+import type {
+  IngKey,
+  Inventory,
+  MatchFlowPhase,
+  PoolMap,
+  Recipe,
+  RecipeActivation,
+  RecipeEvent,
+} from "@/types"
+
+const MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
 
 function isRecipeTimingOpen(recipe: Recipe, phase?: MatchFlowPhase): boolean {
   if (!phase) return false
@@ -12,19 +31,25 @@ function isRecipeTimingOpen(recipe: Recipe, phase?: MatchFlowPhase): boolean {
     (timing === "ban_phase" && phase === "ban") ||
     (timing === "pick_phase" && phase === "craft") ||
     (timing === "before_map" && phase === "craft") ||
-    (timing === "after_score" && (phase === "craft" || phase === "ready_result"))
+    (timing === "after_score" && phase === "play")
 }
 
 function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
   return (
     <span className="flex flex-wrap gap-x-2 gap-y-0.5">
-      {(Object.entries(cost) as [IngKey, number][]).map(([k, n]) => {
-        const ing = INGREDIENTS.find((i) => i.key === k)!
+      {(Object.entries(cost) as [IngKey, number][]).map(([key, amount]) => {
+        const ingredient = INGREDIENTS.find((candidate) => candidate.key === key)
+        if (!ingredient) return null
         return (
-          <span key={k} className="flex items-center gap-1 text-xs text-muted-foreground">
-            <img src={`/assets/Ingredients/${ing.icon}.png`} alt={ing.name} className="h-3 w-3 object-contain select-none" draggable={false} />
-            <span style={{ color: ing.hex }}>{ing.name}</span>
-            <span className="font-mono tabular-nums">x{n}</span>
+          <span key={key} className="flex items-center gap-1 text-xs text-muted-foreground">
+            <img
+              src={`/assets/Ingredients/${ingredient.icon}.png`}
+              alt={ingredient.name}
+              className="h-3 w-3 select-none object-contain"
+              draggable={false}
+            />
+            <span style={{ color: ingredient.hex }}>{ingredient.name}</span>
+            <span className="font-mono tabular-nums">x{amount}</span>
           </span>
         )
       })}
@@ -32,23 +57,40 @@ function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
   )
 }
 
-function IngredientBar({ inv }: { inv: Inventory }) {
+function IngredientBar({ inventory }: { inventory: Inventory }) {
   return (
     <div className="flex flex-col gap-1 pt-1">
       {INGREDIENTS.map(({ key, name, hex, icon }) => (
         <div key={key} className="flex items-center gap-2">
-          <img src={`/assets/Ingredients/${icon}.png`} alt={name} className="h-7 w-7 flex-shrink-0 object-contain select-none" draggable={false} />
+          <img
+            src={`/assets/Ingredients/${icon}.png`}
+            alt={name}
+            className="h-7 w-7 flex-shrink-0 select-none object-contain"
+            draggable={false}
+          />
           <span className="flex-1 text-xs text-muted-foreground">{name}</span>
-          <span className="font-mono text-xs font-semibold tabular-nums" style={{ color: hex }}>x{inv[key]}</span>
+          <span className="font-mono text-xs font-semibold tabular-nums" style={{ color: hex }}>
+            x{inventory[key]}
+          </span>
         </div>
       ))}
     </div>
   )
 }
 
-function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label: string; phase?: MatchFlowPhase; onUseRecipe?: (recipeId: number) => void }) {
-  const affordable = RECIPES.filter((r) => canAfford(r, inv))
-  const locked     = RECIPES.filter((r) => !canAfford(r, inv))
+function RecipeList({
+  inventory,
+  label,
+  phase,
+  onActivate,
+}: {
+  inventory: Inventory
+  label: string
+  phase?: MatchFlowPhase
+  onActivate: (player: string, recipe: Recipe) => void
+}) {
+  const affordable = RECIPES.filter((recipe) => canAfford(recipe, inventory))
+  const locked = RECIPES.filter((recipe) => !canAfford(recipe, inventory))
 
   return (
     <div className="space-y-3">
@@ -56,28 +98,27 @@ function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label:
         <p className="font-heading text-sm uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
         <span className="text-xs text-muted-foreground">{affordable.length} craftable</span>
       </div>
-
-      <IngredientBar inv={inv} />
+      <IngredientBar inventory={inventory} />
 
       {affordable.length > 0 && (
         <div className="space-y-1.5">
-          {affordable.map((r) => (
-            <div key={r.id} className="rounded-md border border-border bg-secondary/10 px-3 py-2">
+          {affordable.map((recipe) => (
+            <div key={recipe.id} className="rounded-md border border-border bg-secondary/10 px-3 py-2">
               <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-medium">{r.name}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{r.desc}</p>
-                  <div className="mt-1 flex items-center gap-2">
-                    <CostDisplay cost={r.cost} />
-                    <span className="text-xs text-muted-foreground/70">· {r.timing}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{recipe.name}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{recipe.desc}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <CostDisplay cost={recipe.cost} />
+                    <span className="text-xs text-muted-foreground/70">{recipe.timing}</span>
                   </div>
                 </div>
                 <Button
                   size="sm"
                   className="flex-shrink-0 text-xs"
                   variant="secondary"
-                  disabled={!isRecipeTimingOpen(r, phase)}
-                  onClick={() => onUseRecipe?.(r.id)}
+                  disabled={!isRecipeTimingOpen(recipe, phase)}
+                  onClick={() => onActivate(label, recipe)}
                 >
                   Use
                 </Button>
@@ -93,10 +134,10 @@ function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label:
             {locked.length} locked recipes
           </summary>
           <div className="mt-1.5 space-y-1">
-            {locked.map((r) => (
-              <div key={r.id} className="rounded-md border border-border/50 px-3 py-2 opacity-50">
-                <p className="text-xs font-medium">{r.name}</p>
-                <CostDisplay cost={r.cost} />
+            {locked.map((recipe) => (
+              <div key={recipe.id} className="rounded-md border border-border/50 px-3 py-2 opacity-50">
+                <p className="text-xs font-medium">{recipe.name}</p>
+                <CostDisplay cost={recipe.cost} />
               </div>
             ))}
           </div>
@@ -106,10 +147,61 @@ function RecipeList({ inv, label, phase, onUseRecipe }: { inv: Inventory; label:
   )
 }
 
-interface UsedRecipeEntry {
-  id: string
-  player: string
-  recipeId: number
+function RecipeEvents({
+  entries,
+  onUndo,
+}: {
+  entries: RecipeEvent[]
+  onUndo?: (eventId: string) => void
+}) {
+  if (entries.length === 0) return null
+  return (
+    <div className="space-y-1.5">
+      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Recipe status</p>
+      {entries.slice().reverse().map((entry) => {
+        const recipe = RECIPES.find((candidate) => candidate.id === entry.recipeId)
+        if (!recipe) return null
+        return (
+          <div key={entry.id} className="rounded-md border border-border/70 bg-card/35 px-3 py-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-medium">{recipe.name}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  {entry.status}
+                  {entry.target ? ` · ${entry.target}` : ""}
+                </p>
+              </div>
+              {entry.status === "active" && !entry.activatedAt && onUndo && (
+                <Button size="xs" variant="ghost" onClick={() => onUndo(entry.id)}>
+                  Revert
+                </Button>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function NativeSelect({
+  value,
+  onChange,
+  children,
+}: {
+  value: string
+  onChange: (value: string) => void
+  children: React.ReactNode
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm outline-none focus:border-ring"
+    >
+      {children}
+    </select>
+  )
 }
 
 interface Props {
@@ -118,52 +210,156 @@ interface Props {
   labelA: string
   labelB: string
   phase?: MatchFlowPhase
-  onUseRecipe?: (player: string, recipeId: number) => void
-  usedRecipes?: UsedRecipeEntry[]
-  onUndoRecipe?: (id: string) => void
+  mappool?: PoolMap[]
+  onUseRecipe?: (player: string, recipeId: number, activation: RecipeActivation) => void
+  recipeEvents?: RecipeEvent[]
+  onUndoRecipe?: (eventId: string) => void
 }
 
-function ActiveRecipes({ entries, onUndo }: { entries: UsedRecipeEntry[]; onUndo?: (id: string) => void }) {
-  if (entries.length === 0) return null
+export function RecipePanel({
+  invA,
+  invB,
+  labelA,
+  labelB,
+  phase,
+  mappool = [],
+  onUseRecipe,
+  recipeEvents = [],
+  onUndoRecipe,
+}: Props) {
+  const [pending, setPending] = useState<{ player: string; recipe: Recipe } | null>(null)
+  const [activation, setActivation] = useState<RecipeActivation>({})
+  const usedA = recipeEvents.filter((event) => event.player.toLowerCase() === labelA.toLowerCase())
+  const usedB = recipeEvents.filter((event) => event.player.toLowerCase() === labelB.toLowerCase())
+  const availableMaps = mappool.filter((map) => map.status === "available")
+  const bannedMaps = mappool.filter((map) => map.status === "banned")
+
+  function openActivation(player: string, recipe: Recipe) {
+    setPending({ player, recipe })
+    setActivation({})
+  }
+
+  function confirmActivation() {
+    if (!pending) return
+    onUseRecipe?.(pending.player, pending.recipe.id, activation)
+    setPending(null)
+    setActivation({})
+  }
+
+  const inputs = pending?.recipe.inputs ?? []
+
   return (
-    <div className="space-y-1.5">
-      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Used</p>
-      {entries.map((entry) => {
-        const recipe = RECIPES.find((r) => r.id === entry.recipeId)
-        if (!recipe) return null
-        return (
-          <div key={entry.id} className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
-            <div>
-              <p className="text-xs font-medium">{recipe.name}</p>
-              <p className="text-[10px] text-muted-foreground">{recipe.desc}</p>
+    <>
+      <div className="space-y-6">
+        <div className="space-y-3">
+          <RecipeEvents entries={usedA} onUndo={onUndoRecipe} />
+          <RecipeList inventory={invA} label={labelA} phase={phase} onActivate={openActivation} />
+        </div>
+        <Separator />
+        <div className="space-y-3">
+          <RecipeEvents entries={usedB} onUndo={onUndoRecipe} />
+          <RecipeList inventory={invB} label={labelB} phase={phase} onActivate={openActivation} />
+        </div>
+      </div>
+
+      <Dialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{pending?.recipe.name}</DialogTitle>
+            <DialogDescription>{pending?.recipe.desc}</DialogDescription>
+          </DialogHeader>
+
+          {inputs.includes("mod") && (
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">Recipe mod</span>
+              <NativeSelect value={activation.mod ?? ""} onChange={(mod) => setActivation((current) => ({ ...current, mod }))}>
+                <option value="">Select mod</option>
+                {MOD_CHOICES.map((mod) => <option key={mod} value={mod}>{mod}</option>)}
+              </NativeSelect>
+            </label>
+          )}
+
+          {inputs.includes("mods_both") && (
+            <div className="grid grid-cols-2 gap-2">
+              {[labelA, labelB].map((label, index) => {
+                const key = index === 0 ? "modA" : "modB"
+                return (
+                  <label key={label} className="space-y-1">
+                    <span className="text-xs text-muted-foreground">{label}</span>
+                    <NativeSelect
+                      value={activation[key] ?? ""}
+                      onChange={(mod) => setActivation((current) => ({ ...current, [key]: mod }))}
+                    >
+                      <option value="">Select mod</option>
+                      {MOD_CHOICES.map((mod) => <option key={mod} value={mod}>{mod}</option>)}
+                    </NativeSelect>
+                  </label>
+                )
+              })}
             </div>
-            <button
-              className="flex-shrink-0 rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-destructive/60 hover:text-destructive"
-              onClick={() => onUndo?.(entry.id)}
-            >
-              Undo
-            </button>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
+          )}
 
-export function RecipePanel({ invA, invB, labelA, labelB, phase, onUseRecipe, usedRecipes = [], onUndoRecipe }: Props) {
-  const usedA = usedRecipes.filter((r) => r.player === labelA)
-  const usedB = usedRecipes.filter((r) => r.player === labelB)
-  return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <ActiveRecipes entries={usedA} onUndo={onUndoRecipe} />
-        <RecipeList inv={invA} label={labelA} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelA, recipeId)} />
-      </div>
-      <Separator />
-      <div className="space-y-3">
-        <ActiveRecipes entries={usedB} onUndo={onUndoRecipe} />
-        <RecipeList inv={invB} label={labelB} phase={phase} onUseRecipe={(recipeId) => onUseRecipe?.(labelB, recipeId)} />
-      </div>
-    </div>
+          {inputs.includes("protect_map") && (
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">Map to protect</span>
+              <NativeSelect value={activation.targetSlot ?? ""} onChange={(targetSlot) => setActivation((current) => ({ ...current, targetSlot }))}>
+                <option value="">Select available map</option>
+                {availableMaps.map((map) => <option key={map.slot} value={map.slot}>{map.slot} · {map.map}</option>)}
+              </NativeSelect>
+            </label>
+          )}
+
+          {inputs.includes("unban_map") && (
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">Map to unban</span>
+              <NativeSelect value={activation.targetSlot ?? ""} onChange={(targetSlot) => setActivation((current) => ({ ...current, targetSlot }))}>
+                <option value="">Select banned map</option>
+                {bannedMaps.map((map) => <option key={map.slot} value={map.slot}>{map.slot} · {map.map}</option>)}
+              </NativeSelect>
+            </label>
+          )}
+
+          {inputs.includes("ingredient") && (
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">Ingredient</span>
+              <NativeSelect
+                value={activation.ingredient ?? ""}
+                onChange={(ingredient) => setActivation((current) => ({ ...current, ingredient: ingredient as IngKey }))}
+              >
+                <option value="">Select ingredient</option>
+                {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
+              </NativeSelect>
+            </label>
+          )}
+
+          {inputs.includes("reward_ingredients") && (
+            <div className="grid grid-cols-2 gap-2">
+              {[0, 1].map((index) => (
+                <label key={index} className="space-y-1">
+                  <span className="text-xs text-muted-foreground">Winner reward {index + 1}</span>
+                  <NativeSelect
+                    value={activation.rewardIngredients?.[index] ?? ""}
+                    onChange={(value) => {
+                      const current = activation.rewardIngredients ?? ["" as IngKey, "" as IngKey]
+                      const next = [...current] as [IngKey, IngKey]
+                      next[index] = value as IngKey
+                      setActivation((state) => ({ ...state, rewardIngredients: next }))
+                    }}
+                  >
+                    <option value="">Select ingredient</option>
+                    {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
+                  </NativeSelect>
+                </label>
+              ))}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPending(null)}>Cancel</Button>
+            <Button onClick={confirmActivation}>Activate</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
