@@ -21,6 +21,11 @@ type ServiceAccountJson = {
   private_key?: string
 }
 
+type CloudflareDefaultCache = {
+  match(request: Request): Promise<Response | undefined>
+  put(request: Request, response: Response): Promise<void>
+}
+
 type SessionUser = {
   osuId: number
   username: string
@@ -435,6 +440,7 @@ async function getGoogleAccessToken(env: Bindings): Promise<string> {
 
 // Module-level read cache — survives across requests on the same CF isolate (burst window)
 const _sheetCache = new Map<string, { data: string[][]; ts: number }>()
+const _sheetBatchInflight = new Map<string, Promise<string[][][]>>()
 const _CACHE_TTL: Partial<Record<string, number>> = {
   "config!A:B":          30_000,
   "mappool!A1:Z":        30_000,
@@ -502,6 +508,59 @@ async function getSheetValues(env: Bindings, rangeA1: string): Promise<string[][
 
   const values = toStringMatrix(payload.values)
   return values ?? []
+}
+
+async function getSheetValuesBatch(env: Bindings, rangesA1: readonly string[]): Promise<string[][][]> {
+  const cached = rangesA1.map((range) => _cacheGet(range))
+  if (cached.every((values) => values !== null)) {
+    return cached as string[][][]
+  }
+
+  const key = rangesA1.join("\n")
+  const inflight = _sheetBatchInflight.get(key)
+  if (inflight) return inflight
+
+  const request = (async () => {
+    const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
+    const accessToken = await getGoogleAccessToken(env)
+    const query = new URLSearchParams({ majorDimension: "ROWS" })
+    for (const range of rangesA1) query.append("ranges", range)
+    const valuesUrl = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values:batchGet?${query}`
+
+    const res = await fetch(valuesUrl, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    })
+
+    if (!res.ok) {
+      const reason = await res.text()
+      throw new Error(`Sheets batch read failed: ${res.status} ${reason}`)
+    }
+
+    const payload = toRecord(await res.json())
+    const rawValueRanges = payload?.valueRanges
+    if (!Array.isArray(rawValueRanges)) {
+      throw new Error("Sheets batch read failed: invalid JSON payload")
+    }
+
+    const values = rangesA1.map((range, index) => {
+      const valueRange = toRecord(rawValueRanges[index])
+      const matrix = valueRange ? toStringMatrix(valueRange.values) : null
+      const data = matrix ?? []
+      _cacheSet(range, data)
+      return data
+    })
+    return values
+  })()
+
+  _sheetBatchInflight.set(key, request)
+  try {
+    return await request
+  } finally {
+    if (_sheetBatchInflight.get(key) === request) _sheetBatchInflight.delete(key)
+  }
 }
 
 async function getAccessRows(env: Bindings): Promise<string[][]> {
@@ -655,10 +714,14 @@ function mapMatchRecord(record: SheetRecord, playersById: Map<string, string>, o
 }
 
 async function getMatches(env: Bindings): Promise<ApiMatch[]> {
-  const [matchValues, playerValues] = await Promise.all([
-    getSheetValues(env, "matches!A1:Z"),
-    getSheetValues(env, "players!A1:Z"),
-  ])
+  const [matchValues, playerValues] = await getSheetValuesBatch(
+    env,
+    ["matches!A1:Z", "players!A1:Z"],
+  )
+  return matchesFromSheetValues(matchValues, playerValues)
+}
+
+function matchesFromSheetValues(matchValues: string[][], playerValues: string[][]): ApiMatch[] {
   const playerRecords = sheetRowsToRecords(playerValues)
   const playersById = mapPlayersById(playerRecords)
   const osuIdsMap   = mapOsuIdsByKey(playerRecords)
@@ -1401,7 +1464,11 @@ function itemPayload(item: SheetRecord): Record<string, unknown> {
 }
 
 async function getItemRecords(env: Bindings): Promise<SheetRecord[]> {
-  const records = sheetRowsToRecords(await getSheetValuesSafe(env, "items!A1:Z"))
+  return itemRecordsFromSheetValues(await getSheetValuesSafe(env, "items!A1:Z"))
+}
+
+function itemRecordsFromSheetValues(values: string[][]): SheetRecord[] {
+  const records = sheetRowsToRecords(values)
   for (const builtin of BUILTIN_ITEM_RECORDS) {
     const itemId = firstValue(builtin, ["item_id"])
     if (!records.some((record) => firstValue(record, ["item_id", "id"]) === itemId)) {
@@ -2936,23 +3003,45 @@ app.get("/api/public/state", (c) => {
 
 app.get("/api/public/match/:matchId/snapshot", async (c) => {
   c.header("Access-Control-Allow-Origin", "*")
-  c.header("Cache-Control", "public, max-age=2, stale-while-revalidate=3")
+  c.header("Cache-Control", "public, max-age=2, s-maxage=3, stale-while-revalidate=3")
   c.header("X-Content-Type-Options", "nosniff")
 
   const matchId = c.req.param("matchId").trim()
   if (!matchId) return c.json({ error: "matchId required" }, 400)
 
   try {
-    const match = await getMatchById(c.env, matchId)
+    const edgeCache = (globalThis as unknown as {
+      caches: { default: CloudflareDefaultCache }
+    }).caches.default
+    const cachedResponse = await edgeCache.match(c.req.raw)
+    if (cachedResponse) return cachedResponse
+
+    const [
+      matchValues,
+      playerValues,
+      matchMapValues,
+      inventoryValues,
+      itemEventValues,
+      itemValues,
+      poolValues,
+    ] = await getSheetValuesBatch(c.env, [
+      "matches!A1:Z",
+      "players!A1:Z",
+      "match_maps!A1:Z",
+      "inventory!A1:Z",
+      "item_events!A1:ZZ",
+      "items!A1:Z",
+      "mappool!A1:Z",
+    ])
+
+    const match = matchesFromSheetValues(matchValues, playerValues)
+      .find((candidate) => candidate.id === matchId) ?? null
     if (!match) return c.json({ error: "Match not found" }, 404)
 
-    const [matchMapValues, inventoryValues, recipeEvents, items, poolValues] = await Promise.all([
-      getSheetValuesSafe(c.env, "match_maps!A1:Z"),
-      getSheetValuesSafe(c.env, "inventory!A1:Z"),
-      getRecipeEvents(c.env, matchId, false),
-      getItemRecords(c.env),
-      getSheetValuesSafe(c.env, "mappool!A1:Z"),
-    ])
+    const recipeEvents = sheetRowsToRecords(itemEventValues)
+      .map(parseRecipeEventRecord)
+      .filter((event): event is RecipeEventRecord => event !== null && event.matchId === matchId)
+    const items = itemRecordsFromSheetValues(itemValues)
     const matchMaps = sheetRowsToRecords(matchMapValues)
       .filter((record) => firstValue(record, ["match_id"]) === matchId)
     const inventories = sheetRowsToRecords(inventoryValues)
@@ -3009,7 +3098,7 @@ app.get("/api/public/match/:matchId/snapshot", async (c) => {
       blue: countCompletedWins(matchMaps, matchId, match.playerB),
     }
 
-    return c.json({
+    const response = c.json({
       matchId: match.id,
       round: match.round,
       status: match.status,
@@ -3040,6 +3129,8 @@ app.get("/api/public/match/:matchId/snapshot", async (c) => {
       },
       updatedAt: new Date().toISOString(),
     })
+    c.executionCtx.waitUntil(edgeCache.put(c.req.raw, response.clone()))
+    return response
   } catch (error) {
     return c.json({
       error: error instanceof Error ? error.message : "Failed to load public match snapshot",
