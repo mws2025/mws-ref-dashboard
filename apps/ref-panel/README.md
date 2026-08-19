@@ -102,7 +102,7 @@ Required in `.env.local`:
 | `SESSION_SECRET` | Session JWT signing secret |
 | `IRC_BOT_USERNAME` | osu! IRC bot username |
 | `IRC_BOT_PASSWORD` | osu! IRC password |
-| `IRC_RELAY_URL` | Base URL for the VPS IRC relay |
+| `IRC_RELAY_URL` | HTTPS base URL for the VPS IRC relay; HTTP redirects can change relay POST requests to GET |
 | `IRC_RELAY_SECRET` | Secret sent to the IRC relay as `X-Relay-Secret` |
 
 `GOOGLE_APPLICATION_CREDENTIALS` must be inline JSON in Pages runtime. The `private_key` value may contain escaped `\n`; the server normalizes it before Web Crypto import.

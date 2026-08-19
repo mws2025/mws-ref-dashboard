@@ -3313,25 +3313,49 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     headers: { "X-Relay-Secret": relaySecret, Accept: "text/event-stream" },
   })
   if (!streamRes.ok || !streamRes.body) {
-    return c.json({ error: "Relay stream unavailable" }, 503)
+    return c.json({ error: `Relay stream unavailable (${streamRes.status})` }, 503)
   }
 
+  const reader = streamRes.body.getReader()
+
   // Send !mp make to BanchoBot (PM)
-  await fetch(`${relayUrl}/send`, {
+  const sendRes = await fetch(`${relayUrl}/send`, {
     method: "POST",
+    redirect: "manual",
     headers: { "Content-Type": "application/json", "X-Relay-Secret": relaySecret },
     body: JSON.stringify({ channel: "BanchoBot", message: `!mp make ${title}` }),
   })
+  if (!sendRes.ok) {
+    const reason = (await sendRes.text()).slice(0, 300)
+    await reader.cancel().catch(() => {})
+    return c.json({
+      error: `Relay send failed (${sendRes.status})${reason ? `: ${reason}` : ""}`,
+    }, 502)
+  }
 
   // Read SSE until BanchoBot confirms lobby created
-  const reader = streamRes.body.getReader()
   const decoder = new TextDecoder()
   let lobbyUrl: string | null = null
   const deadline = Date.now() + 12000
   let buf = ""
 
   while (Date.now() < deadline && !lobbyUrl) {
-    const { done, value } = await reader.read()
+    const remainingMs = deadline - Date.now()
+    const chunk = await new Promise<{ done: boolean; value?: Uint8Array } | null>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(null), remainingMs)
+      reader.read().then(
+        (result) => {
+          clearTimeout(timeout)
+          resolve(result)
+        },
+        (error) => {
+          clearTimeout(timeout)
+          reject(error)
+        },
+      )
+    })
+    if (!chunk) break
+    const { done, value } = chunk
     if (done) break
     buf += decoder.decode(value, { stream: true })
     const lines = buf.split("\n")
@@ -3350,7 +3374,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
       if (lobbyUrl) break
     }
   }
-  reader.cancel()
+  await reader.cancel().catch(() => {})
 
   if (!lobbyUrl) {
     return c.json({ error: "Timed out waiting for BanchoBot" }, 408)
