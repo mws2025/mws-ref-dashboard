@@ -1,0 +1,28 @@
+,,,NM,PS,HR,DT,FM
+,,Description,Egg,Sugar,Butter,Flour,Milk
+7,Banana Bread,Players play the map twice. Recipes used are replicated between playthroughs and the point/ingredients are awarded at the end based on the highest score between all runs.,4,1,,,1
+9,Beignets,Ban one more map.,2,1,1,1,1
+5,2 Tier Cake,"Increases score by 100,000",1,1,1,1,
+6,Custard,Players can add a single mod (HD/HR/HT/EZ/FL/SO) to a map. Affects both players.,1,1,1,1,1
+11,Quiche,Force HD on both players for one map.,3,,,,
+21,Caramel,Unlock the wildcard slot - A Random Map from Monodramatic World Stage or Monodramatic Test Tournament Is Played. Winner chooses two ingredients of choice.,,3,,,
+14,Brown Butter,Force both players onto HR for one map.,,,3,,
+22,Dough,"If the player wins this map by more than >200k, gain the normal ingredient and remove an ingredient from your opponent.",,,,3,
+23,Hot Chocolate,"Gain your home base ingredient on your next pick. This has no effect if you pick your home base mod (If your home base is NM but you win HR1 with this recipe, you get 1x Egg & 1x Butter. A loss would give you 1x Egg).",,,,,3
+8,Cinnamon Roll,Protect a map from being banned,1,2,1,1,1
+10,3 Tier Cake,"Increases score by 200,000",1,1,2,1,1
+1,Sugar Cube,Changes DT into NC,,1,,,
+2,Sheet Cake,"Increases score by 50,000",,,1,,1
+3,Sourdough,No effect. Just for the love of the game.,,,,1,
+4,Sugar Cookies,Players can add a single mod (HD/HR/HT/EZ/FL/SO) to a map. Affects only the player who used the recipe.,1,,1,1,
+12,Crepe,Convert to Acc Wincon (Score V1),1,,2,,1
+24,Shortbread,"Activatable only if >=2 points behind your opponent in match score. If you win the next map, gain 2 ingredients instead of 1. If you lose, gain no additional effect.",1,,,1,
+13,Pancakes,Player Gets 1.1x Scoring for 1 Map.,,,,2,1
+15,Omelette,"We lost the plot, steal an ingredient.",1,,1,,
+16,Bubble Tea,If the gap in score is 10k or less. Run the map again regardless of who win/loses.,,2,,,1
+17,Pound Cake,Force SD on both players.,1,2,1,,1
+18,Magic Cake,Use your opponents last crafted recipe effect.,,1,2,2,
+19,Cinnamon Roll,Unban a map.,1,,2,2,1
+20,Tiramisu,Convert to ScoreV1,2,1,,2,1
+,,,,,,,
+,,,21,17,19,19,15
