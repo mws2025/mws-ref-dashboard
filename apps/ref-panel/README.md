@@ -298,7 +298,7 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 
 | `action` | Body fields | Result |
 | --- | --- | --- |
-| `record_rolls` | `rollA`, `rollB` | Stores rolls; tie stays in `roll`, otherwise advances to `order`. |
+| `record_rolls` | `rollA`, `rollB` | Stores whole-number rolls from 1-100; a tie stays in `roll`, otherwise advances to `order`. |
 | `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `home_mod`. |
 | `set_home_mod` | `player`, `homeMod` | Stores a home mod; after both choose, advances to `ban`. |
 
@@ -330,7 +330,9 @@ scores, and winner; `unpick` does not require `player`.
 ```
 
 Replay recipes return `replayRequired: true` on the first run. Submit the replay through the same endpoint. Otherwise,
-the response contains final scores, winner, inventories, flow state, and any scoring-mode restore commands.
+the response contains final scores, winner, inventories, flow state, `nextPicker`, `ingredient`, `ingredientAmount`, and
+any scoring-mode restore commands. A win on the winner's selected home-mod pool awards two base ingredients; other
+pool wins award one.
 
 `POST /api/match/:matchId/recipe` always requires `player` and `recipeId`. Activation-specific fields are optional unless
 the selected effect requires them:

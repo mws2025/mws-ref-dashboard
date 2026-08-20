@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { IRC_BOT } from "@/data/mock"
+import { lobbyModsForPool } from "@/lib/match-rules"
 import type { PoolMap } from "@/types"
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
   refName: string
   mappool: PoolMap[] | null
   channel: string | undefined
+  enforceNF: boolean
   onInjectMessage: (from: string, message: string, local?: boolean) => void
   onGameResult: (slot: string, winner: string, scoreA: number, scoreB: number) => void
   onUnlockPostResult: () => void
@@ -24,7 +26,7 @@ function Done() {
 }
 
 export function TestSimPanel({
-  playerA, playerB, refName, mappool, channel,
+  playerA, playerB, refName, mappool, channel, enforceNF,
   onInjectMessage, onGameResult, onUnlockPostResult,
 }: Props) {
   const [joinsSimulated, setJoinsSimulated] = useState(false)
@@ -48,8 +50,8 @@ export function TestSimPanel({
     const a = Math.floor(Math.random() * 100) + 1
     const b = Math.floor(Math.random() * 100) + 1
     setRollA(a); setRollB(b)
-    onInjectMessage("BanchoBot", `${playerA} rolled ${a} point(s)`)
-    setTimeout(() => onInjectMessage("BanchoBot", `${playerB} rolled ${b} point(s)`), 600)
+    onInjectMessage("BanchoBot", `${playerA} rolls ${a} point(s)`)
+    setTimeout(() => onInjectMessage("BanchoBot", `${playerB} rolls ${b} point(s)`), 600)
     setRollsDone(true)
   }
 
@@ -61,14 +63,6 @@ export function TestSimPanel({
     onInjectMessage(IRC_BOT, `<${refName}>: ${player} to pick next!`, true)
   }
 
-  function simMods(pool: string): string {
-    const p = pool.toUpperCase()
-    if (p === "FM" || p === "TB") return "Freemod"
-    if (p === "HR") return "HR"
-    if (p === "DT") return "DT"
-    return "None"
-  }
-
   function simulateResult(map: PoolMap, winner: string) {
     const loser = winner === playerA ? playerB : playerA
     const winScore  = 800000 + Math.floor(Math.random() * 400000)
@@ -76,7 +70,7 @@ export function TestSimPanel({
 
     // Inject pick sequence commands
     if (map.beatmapId) onInjectMessage(IRC_BOT, `!mp map ${map.beatmapId} 0`, true)
-    onInjectMessage(IRC_BOT, `!mp mods ${simMods(map.pool)}`, true)
+    onInjectMessage(IRC_BOT, `!mp mods ${lobbyModsForPool(map.pool, enforceNF)}`, true)
     setTimeout(() => onInjectMessage(IRC_BOT, `!mp timer 120`, true), 300)
     setTimeout(() => onInjectMessage(IRC_BOT, `!mp start 10`, true), 600)
     setTimeout(() => {

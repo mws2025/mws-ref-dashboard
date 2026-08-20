@@ -6,6 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
+import { lobbyModsForPool, parseRollAnnouncement } from "@/lib/match-rules"
 import type {
   HomeMod,
   IngKey,
@@ -58,12 +59,12 @@ function parseBanchoEvent(msg: string, ts: string, playerA: string, playerB: str
   const leaveM = msg.match(/^(.+) left the game\.$/)
   if (leaveM) return { id, ts, kind: "leave", text: `${leaveM[1]} left the game` }
 
-  const rollM = msg.match(/^(.+) rolled (\d+) point\(s\)$/)
-  if (rollM) {
-    const who = rollM[1]; const val = rollM[2]
+  const roll = parseRollAnnouncement(msg)
+  if (roll) {
+    const { player: who, value } = roll
     const kind: EventKind = matchPlayers.has(who.toLowerCase()) ? "roll" : "other_roll"
-    const text = `${who} rolled ${val}`
-    return { id, ts, kind, text, player: who, value: Number(val) }
+    const text = `${who} rolled ${value}`
+    return { id, ts, kind, text, player: who, value }
   }
 
   if (msg === "The match has been aborted.") {
@@ -395,6 +396,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         totals?: { scoreA: number; scoreB: number }
         inventories?: { a: Inventory; b: Inventory }
         state?: MatchFlowState
+        nextPicker?: string
         restoreCommands?: string[]
         notices?: string[]
       }
@@ -421,7 +423,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       if (data.inventories) setLiveInventory(data.inventories)
       if (data.state) setFlowState(data.state)
       for (const command of data.restoreCommands ?? []) ircRef.current?.send(command)
-      const nextPicker = opponentOf(winner, match.playerA, match.playerB)
+      const nextPicker = data.nextPicker ?? opponentOf(winner, match.playerA, match.playerB)
       announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker)
       const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
       if (recipesRes.ok) {
@@ -532,19 +534,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     })
   }
 
-  function getPickMods(pool: string, nf: boolean): string {
-    const p = pool.toUpperCase()
-    if (p === "FM" || p === "TB") return "Freemod"
-    if (p === "PS") return nf ? "NF" : "None"
-    if (p === "HR") return nf ? "HRNF" : "HR"
-    if (p === "DT") return nf ? "DTNF" : "DT"
-    return nf ? "NF" : "None"
-  }
-
   async function sendPickSequence(map: PoolMap, channel: string, recipeSetup?: RecipePickSetup) {
     if (map.beatmapId) await sendIrc(channel, `!mp map ${map.beatmapId} 0`)
     for (const command of recipeSetup?.commandsBefore ?? []) await sendIrc(channel, command)
-    await sendIrc(channel, `!mp mods ${recipeSetup?.mods || getPickMods(map.pool, enforceNF)}`)
+    await sendIrc(channel, `!mp mods ${recipeSetup?.mods || lobbyModsForPool(map.pool, enforceNF)}`)
     for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
     await sendIrc(channel, "!mp timer 120")
   }
@@ -858,6 +851,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                   refName={match.referee ?? "Referee"}
                   mappool={liveMappool}
                   channel={lobbyUrlToChannel(liveLobbyUrl)}
+                  enforceNF={enforceNF}
                   onInjectMessage={injectIrcMsg}
                   onGameResult={simulateGameResult}
                   onUnlockPostResult={() => setTestResultUnlocked(true)}

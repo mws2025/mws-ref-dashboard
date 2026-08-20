@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
+import { isValidRoll } from "@/lib/match-rules"
 import type { MatchFlowState, PoolMap } from "@/types"
 
 interface Props {
@@ -61,14 +62,20 @@ export function FlowPanel({
       : mappool.find((map) => map.status === "picked") ?? null
   const currentSlotKey = currentMap?.slot ?? ""
   const [scoreEntry, setScoreEntry] = useState({ slot: "", a: "", b: "" })
+  const [rollEntry, setRollEntry] = useState<{ a?: string; b?: string }>({})
 
   if (!state) {
     return <p className="pt-4 text-center text-xs text-muted-foreground/50">Loading flow state.</p>
   }
 
-  const rollA = latestRolls.a ?? state.rollA
-  const rollB = latestRolls.b ?? state.rollB
-  const rollWinner = rollA != null && rollB != null && rollA !== rollB ? (rollA > rollB ? playerA : playerB) : state.rollWinner
+  const detectedRollA = latestRolls.a ?? state.rollA
+  const detectedRollB = latestRolls.b ?? state.rollB
+  const rollA = rollEntry.a === undefined ? detectedRollA : Number(rollEntry.a)
+  const rollB = rollEntry.b === undefined ? detectedRollB : Number(rollEntry.b)
+  const validRollA = typeof rollA === "number" && isValidRoll(rollA)
+  const validRollB = typeof rollB === "number" && isValidRoll(rollB)
+  const canSaveRolls = validRollA && validRollB
+  const rollWinner = canSaveRolls && rollA !== rollB ? (rollA > rollB ? playerA : playerB) : state.rollWinner
   const winsNeeded = Math.ceil(bestOf / 2)
   const scoreInputA = scoreEntry.slot === currentSlotKey ? scoreEntry.a : ""
   const scoreInputB = scoreEntry.slot === currentSlotKey ? scoreEntry.b : ""
@@ -132,16 +139,42 @@ export function FlowPanel({
       {state.phase === "roll" && (
         <div className="space-y-2">
           <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Rolls</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">{playerA}</span>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                inputMode="numeric"
+                value={rollEntry.a ?? detectedRollA ?? ""}
+                onChange={(event) => setRollEntry((current) => ({ ...current, a: event.target.value }))}
+                placeholder="1-100"
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] text-muted-foreground">{playerB}</span>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                inputMode="numeric"
+                value={rollEntry.b ?? detectedRollB ?? ""}
+                onChange={(event) => setRollEntry((current) => ({ ...current, b: event.target.value }))}
+                placeholder="1-100"
+              />
+            </label>
+          </div>
           <Button
             size="sm"
             variant="outline"
             className="w-full text-xs"
-            disabled={rollA == null || rollB == null}
-            onClick={() => rollA != null && rollB != null && onSaveRolls(rollA, rollB)}
+            disabled={!canSaveRolls}
+            onClick={() => canSaveRolls && onSaveRolls(rollA, rollB)}
           >
             Save current rolls
           </Button>
-          {rollA != null && rollB != null && rollA === rollB && (
+          {canSaveRolls && rollA === rollB && (
             <p className="text-xs text-muted-foreground">Tie roll. Ask both players to roll again.</p>
           )}
         </div>

@@ -2,6 +2,14 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie"
 import { Hono, type Context } from "hono"
 import { handle } from "hono/cloudflare-pages"
 import { sign, verify } from "hono/jwt"
+import {
+  addLobbyMod,
+  formatLobbyMods,
+  homeModIngredientCount,
+  isValidRoll,
+  lobbyModsForPool,
+  nextPlayerAfterPick,
+} from "../../src/lib/match-rules"
 
 type Bindings = {
   GOOGLE_APPLICATION_CREDENTIALS?: string
@@ -1596,24 +1604,6 @@ function publicSnapshotRecipesForPlayer(
   }
 }
 
-function baseLobbyMods(pool: string, enforceNF: boolean): string {
-  const normalized = pool.trim().toUpperCase()
-  if (normalized === "FM" || normalized === "TB") return "Freemod"
-  if (normalized === "HR") return enforceNF ? "HRNF" : "HR"
-  if (normalized === "DT") return enforceNF ? "DTNF" : "DT"
-  return enforceNF ? "NF" : "None"
-}
-
-function addLobbyMod(base: string, mod: string, enforceNF: boolean): string {
-  if (base.toLowerCase() === "freemod") return "Freemod"
-  const codes: string[] = (base === "None" ? "" : base)
-    .replace(/NF/g, "")
-    .match(/[A-Z]{2}/g) ?? []
-  if (!codes.includes(mod)) codes.push(mod)
-  if (enforceNF && !codes.includes("NF")) codes.push("NF")
-  return codes.join("") || "None"
-}
-
 type RecipePickSetup = {
   eventIds: string[]
   mods: string
@@ -1652,7 +1642,7 @@ async function activateRecipesForPick(
   }
 
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
-  let mods = baseLobbyMods(pool, enforceNF)
+  let mods = lobbyModsForPool(pool, enforceNF)
   const commandsBefore: string[] = []
   const notices: string[] = []
   const teamMode = teamModeToInt(configMap.get("team mode") ?? "")
@@ -1663,17 +1653,17 @@ async function activateRecipesForPick(
     const item = itemForEvent(items, event)
     const payload = { ...itemPayload(item ?? {}), ...event.payload }
     if (effectType === "mod_replace" && pool.toUpperCase() === "DT") {
-      mods = enforceNF ? "NCNF" : "NC"
+      mods = formatLobbyMods(["NC"], enforceNF)
     } else if (effectType === "mod_add_self") {
-      mods = "Freemod"
+      mods = formatLobbyMods(["Freemod"], enforceNF)
       notices.push(`${event.player} must use ${String(payload.mod ?? "")}; the opponent must not add a recipe mod.`)
     } else if (effectType === "mod_add_both") {
-      mods = "Freemod"
+      mods = formatLobbyMods(["Freemod"], enforceNF)
       notices.push(`Both players must use their selected Custard mods: ${String(payload.modA ?? payload.mod ?? "")} / ${String(payload.modB ?? payload.mod ?? "")}.`)
     } else if (effectType === "mod_force_both") {
       const forcedMod = String(payload.mod ?? "").toUpperCase()
       if (forcedMod === "PS") {
-        mods = "Freemod"
+        mods = formatLobbyMods(["Freemod"], enforceNF)
         notices.push("Quiche active: both players must enable PS for this map.")
       } else if (forcedMod) {
         mods = addLobbyMod(mods, forcedMod, enforceNF)
@@ -2123,10 +2113,14 @@ app.post("/api/match/:matchId/state", async (c) => {
     let nextState: MatchFlowState = state
 
     if (action === "record_rolls") {
-      const rollA = Number(body.rollA)
-      const rollB = Number(body.rollB)
-      if (!Number.isFinite(rollA) || !Number.isFinite(rollB)) {
-        return c.json({ error: "rollA and rollB required" }, 400)
+      const rollA = typeof body.rollA === "number" || (typeof body.rollA === "string" && body.rollA.trim())
+        ? Number(body.rollA)
+        : NaN
+      const rollB = typeof body.rollB === "number" || (typeof body.rollB === "string" && body.rollB.trim())
+        ? Number(body.rollB)
+        : NaN
+      if (!isValidRoll(rollA) || !isValidRoll(rollB)) {
+        return c.json({ error: "rollA and rollB must be whole numbers from 1 to 100" }, 400)
       }
       if (rollA === rollB) {
         nextState = { ...state, phase: "roll", rollA, rollB, rollWinner: undefined, turnPlayer: undefined }
@@ -2221,6 +2215,7 @@ app.post("/api/match/:matchId/score", async (c) => {
     const mapIdIdx = idx("map_id")
     const scoreAIdx = idx("score_a")
     const scoreBIdx = idx("score_b")
+    const pickedByIdx = idx("picked_by")
     const winnerIdx = idx("winner")
     const statusIdx = idx("status")
     const existingRowIdx = rows.findIndex((row) => row[matchIdIdx]?.trim() === matchId && row[slotIdx]?.trim() === slot)
@@ -2343,8 +2338,25 @@ app.post("/api/match/:matchId/score", async (c) => {
     const poolRecords = sheetRowsToRecords(poolValues)
     const pool = getMapPoolForSlot(poolRecords, slot)
     const ingredient = POOL_TO_INGREDIENT[pool]
+    const ingredientAmount = ingredient
+      ? homeModIngredientCount(
+          pool,
+          winner,
+          playerA,
+          playerB,
+          flowBefore.homeModA,
+          flowBefore.homeModB,
+        )
+      : 0
     if (ingredient) {
-      await applyInventoryDelta(c.env, matchId, winner, { [ingredient]: 1 }, sessionUser?.username ?? "unknown", "map_win_ingredient")
+      await applyInventoryDelta(
+        c.env,
+        matchId,
+        winner,
+        { [ingredient]: ingredientAmount },
+        sessionUser?.username ?? "unknown",
+        ingredientAmount === 2 ? "home_mod_win_ingredient" : "map_win_ingredient",
+      )
     }
 
     const now = new Date().toISOString()
@@ -2428,10 +2440,14 @@ app.post("/api/match/:matchId/score", async (c) => {
 
     const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
     const matchOver = totals.scoreA >= winsNeeded || totals.scoreB >= winsNeeded
+    const pickedBy = beforeRow?.[pickedByIdx]?.trim() || flowBefore.turnPlayer
+    const nextPicker = nextPlayerAfterPick(pickedBy, playerA, playerB)
+      ?? flowBefore.firstPicker
+      ?? opponentOf(winner, playerA, playerB)
     const flowState = await writeMatchFlowState(c.env, {
       ...(await getMatchFlowState(c.env, matchId, Boolean(match?.lobbyUrl))),
       phase: matchOver ? "ready_result" : "craft",
-      turnPlayer: matchOver ? undefined : opponentOf(winner, playerA, playerB),
+      turnPlayer: matchOver ? undefined : nextPicker,
       currentSlot: undefined,
     })
 
@@ -2442,7 +2458,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       "match_map",
       `${matchId}:${slot}`,
       beforeJson,
-      JSON.stringify({ slot, rawScoreA, rawScoreB, scoreA, scoreB, winner, status: "completed", pool, ingredient }),
+      JSON.stringify({ slot, rawScoreA, rawScoreB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount }),
     ).catch(() => {})
 
     return c.json({
@@ -2454,8 +2470,10 @@ app.post("/api/match/:matchId/score", async (c) => {
       totals,
       pool,
       ingredient,
+      ingredientAmount,
       inventories,
       state: flowState,
+      nextPicker: matchOver ? undefined : nextPicker,
       restoreCommands,
     })
   } catch (error) {
