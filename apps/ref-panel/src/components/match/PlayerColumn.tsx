@@ -130,7 +130,7 @@ function HomeModControl({
   )
 }
 
-type LobbyConfirm = "create" | "close" | "result" | "reminder"
+type LobbyConfirm = "create" | "close" | "result" | "reminder" | "reset"
 
 interface Props {
   playerA: string
@@ -152,13 +152,12 @@ interface Props {
   onPostResult?: () => void
   onSendReminder?: () => void
   onForfeit?: (winner: string) => void
+  onResetMatch?: () => void
   homeModA?: HomeMod
   homeModB?: HomeMod
   homeModTurnPlayer?: string
   onHomeModSelect?: (player: string, homeMod: HomeMod) => void
   onClearHomeMod?: (player: string) => void
-  onScoreAEdit?: (val: number) => void
-  onScoreBEdit?: (val: number) => void
   lobbyNameMismatch?: { found: string; expected: string }
   onRetryJoin?: () => void
   onClearLobbyMismatch?: () => void
@@ -174,6 +173,7 @@ const LOBBY_CONFIRM_CONFIG: Record<LobbyConfirm, { title: string; description: s
   close:    { title: "Close lobby",         description: "This will close the osu! lobby. This action cannot be undone.",                                actionLabel: "Close lobby",  destructive: true },
   result:   { title: "Post match result",   description: "This will post the final match result to the tournament sheet. Make sure scores are correct.", actionLabel: "Post result"   },
   reminder: { title: "Send match reminder", description: "Posts a reminder ping to the reminder channel with estimated time until match start.",        actionLabel: "Send reminder" },
+  reset:    { title: "Reset whole match",   description: "Clears every pick, ban, score, ingredient, recipe, home mod, and flow decision for this match. The lobby stays open.", actionLabel: "Reset match", destructive: true },
 }
 
 export function PlayerColumn({
@@ -181,9 +181,8 @@ export function PlayerColumn({
   invA, invB, invLoading,
   round, refName, streamer,
   onInvAChange, onInvBChange,
-  onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit,
+  onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit, onResetMatch,
   homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
-  onScoreAEdit, onScoreBEdit,
   lobbyNameMismatch, onRetryJoin, onClearLobbyMismatch,
   matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
@@ -208,6 +207,7 @@ export function PlayerColumn({
     if (confirmAction === "close")    onCloseLobby?.()
     if (confirmAction === "result")   onPostResult?.()
     if (confirmAction === "reminder") onSendReminder?.()
+    if (confirmAction === "reset")    onResetMatch?.()
     setConfirmAction(null)
   }
 
@@ -222,21 +222,7 @@ export function PlayerColumn({
             {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none tabular-nums">{scoreA}</span>}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : (
-            <div className="flex items-center justify-between">
-              <WinBoxes score={scoreA} needed={winsNeeded} />
-              <div className="flex items-center gap-0.5">
-                <button
-                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
-                  disabled={isDemo || scoreA <= 0}
-                  onClick={() => onScoreAEdit?.(scoreA - 1)}
-                >−</button>
-                <button
-                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
-                  disabled={isDemo}
-                  onClick={() => onScoreAEdit?.(scoreA + 1)}
-                >+</button>
-              </div>
-            </div>
+            <WinBoxes score={scoreA} needed={winsNeeded} />
           )}
           <HomeModControl
             value={homeModA}
@@ -264,21 +250,7 @@ export function PlayerColumn({
             {invLoading ? <Skeleton className="h-7 w-8" /> : <span className="font-heading text-3xl leading-none tabular-nums">{scoreB}</span>}
           </div>
           {invLoading ? <Skeleton className="h-3 w-28" /> : (
-            <div className="flex items-center justify-between">
-              <WinBoxes score={scoreB} needed={winsNeeded} />
-              <div className="flex items-center gap-0.5">
-                <button
-                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
-                  disabled={isDemo || scoreB <= 0}
-                  onClick={() => onScoreBEdit?.(scoreB - 1)}
-                >−</button>
-                <button
-                  className="flex h-4 w-4 items-center justify-center rounded border border-border/50 text-[11px] text-muted-foreground hover:border-border hover:text-foreground disabled:opacity-30"
-                  disabled={isDemo}
-                  onClick={() => onScoreBEdit?.(scoreB + 1)}
-                >+</button>
-              </div>
-            </div>
+            <WinBoxes score={scoreB} needed={winsNeeded} />
           )}
           <HomeModControl
             value={homeModB}
@@ -350,6 +322,7 @@ export function PlayerColumn({
         {!isFinished && (
           <Button size="sm" variant="outline" className="w-full text-xs border-destructive/40 text-destructive/80 hover:border-destructive hover:text-destructive hover:bg-destructive/5" disabled={isDemo} onClick={() => setForfeitOpen(true)}>Set forfeit</Button>
         )}
+        <Button size="sm" variant="outline" className="w-full border-destructive/40 text-xs text-destructive/80 hover:border-destructive hover:bg-destructive/5 hover:text-destructive" disabled={isDemo} onClick={() => setConfirmAction("reset")}>Reset whole match</Button>
         {hasLobby && (
           <Button size="sm" variant="destructive" className="w-full text-xs" disabled={isDemo} onClick={() => setConfirmAction("close")}>Close lobby</Button>
         )}
@@ -374,7 +347,7 @@ export function PlayerColumn({
             <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
             <AlertDialogAction
               size="sm"
-              variant={confirmAction === "close" ? "destructive" : "default"}
+              variant={confirmAction === "close" || confirmAction === "reset" ? "destructive" : "default"}
               onClick={handleConfirmAction}
             >
               {confirmAction ? LOBBY_CONFIRM_CONFIG[confirmAction].actionLabel : ""}

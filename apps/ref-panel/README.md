@@ -225,7 +225,7 @@ if (!response.ok) {
 const snapshot = await response.json()
 ```
 
-The response contains `players`, picked and banned `maps`, `score`/`stars`, current `ingredients`, and per-side recipe
+The response contains `players` (including each `homeMod`), picked, banned, and protected `maps`, `score`/`stars`, current `ingredients`, and per-side recipe
 values. `current` is the latest active recipe or `null`; `previous` is an array of resolved recipes; and `active` is an
 array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a two-second public cache.
 
@@ -253,8 +253,10 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
 | `GET` | `/api/match/:matchId/state` | Returns persisted flow state or its lobby-aware default. |
 | `POST` | `/api/match/:matchId/state` | Records rolls, order selection, or a player's home mod. |
-| `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or `unpick` and activates map recipes. |
+| `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or corrective `unpick`. |
+| `POST` | `/api/match/:matchId/setup-map` | Binds both players' active recipes to the picked map and returns lobby setup commands. |
 | `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
+| `POST` | `/api/match/:matchId/reset` | Resets the full match state while preserving the connected lobby. |
 | `POST` | `/api/match/:matchId/post-result` | Completes the match and posts the result webhook. |
 | `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1`. |
 
@@ -315,8 +317,10 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 ```
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
-`manualOrder: true`, either player may pick, ban, or protect an eligible map. Use `action: "unpick"` to clear the pick,
-scores, and winner; `unpick` does not require `player`.
+`manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
+portal. A pick opens the recipe window; call `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }` when recipes
+are ready. Use `action: "unpick"` to clear picked or completed maps and reverse their map/recipe rewards; `unpick` does
+not require `player`.
 
 `POST /api/match/:matchId/score` derives the winner from recipe-adjusted scores:
 
@@ -325,15 +329,17 @@ scores, and winner; `unpick` does not require `player`.
   "slot": "NM1",
   "playerA": "Player A",
   "playerB": "Player B",
-  "scoreA": 987432,
-  "scoreB": 854201
+  "scoreA": "98.76%",
+  "scoreB": "98.54%"
 }
 ```
 
-Replay recipes return `replayRequired: true` on the first run. Submit the replay through the same endpoint. Otherwise,
+Scores accept numbers, comma separators, and an optional trailing `%`. Replay recipes return `replayRequired: true` on
+the first run. Submit the replay through the same endpoint. Repeating a request after a lost response returns the
+already-committed result instead of applying rewards twice. Otherwise,
 the response contains final scores, winner, inventories, flow state, `nextPicker`, `ingredient`, `ingredientAmount`, and
-any scoring-mode restore commands. A win on the winner's selected home-mod pool awards two base ingredients; other
-pool wins award one.
+any scoring-mode restore commands. A map winner receives one pool ingredient; a player whose home mod matches that pool
+receives one additional ingredient even on a loss. A home-mod win therefore awards two.
 
 `POST /api/match/:matchId/recipe` always requires `player` and `recipeId`. Activation-specific fields are optional unless
 the selected effect requires them:
@@ -362,7 +368,9 @@ Other mutation bodies:
 | Route | JSON body |
 | --- | --- |
 | `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
-| `POST /api/match/:matchId/create-lobby` | `{ "playerA": "...", "playerB": "...", "refUsername": "..." }` |
+| `POST /api/match/:matchId/create-lobby` | `{ "refUsername": "..." }` (players are read from the match sheet) |
+| `POST /api/match/:matchId/setup-map` | `{ "slot": "NM1" }` |
+| `POST /api/match/:matchId/reset` | No body required. |
 | `POST /api/match/:matchId/join-lobby` | `{ "mpId": "123456" }` |
 | `POST /api/match/:matchId/close-lobby` | `{ "channel": "#mp_123", "messages": [{ "ts": "...", "from": "...", "message": "..." }] }` |
 | `POST /api/match/:matchId/remind` | No body required. |
@@ -387,7 +395,7 @@ Match panel:
 - Uses Match Control for roll/order/score flow and event log.
 - Uses the left player column for score, home mod selection, inventory, lobby actions, and result posting.
 - Uses the Recipes tab for activation inputs, lifecycle status, and server-side revert/refund.
-- Manual pick/ban order defaults on; turning it off enforces the persisted match flow.
+- Manual pick/ban order defaults off; turning it on allows free map actions.
 - Test mode avoids live IRC transport while retaining authoritative Sheet-backed match and recipe state.
 
 ## Repo Layout

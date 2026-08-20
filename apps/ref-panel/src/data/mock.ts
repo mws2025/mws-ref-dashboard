@@ -75,7 +75,7 @@ export const IRC_LOG: IrcEntry[] = [
   { time: "10:18", sender: IRC_BOT, ref: "RefA", msg: "!mp timer 120 t4vhn9ks",                                              type: "ref"    },
   { time: "10:18", sender: "BanchoBot",          msg: "Countdown ends in 120 seconds.",                                      type: "bancho" },
   { time: "10:19", sender: "Strawberry_Jam",     msg: "ready",                                                               type: "player" },
-  { time: "10:20", sender: IRC_BOT, ref: "RefA", msg: "!mp start 10 yw6cd3mf",                                              type: "ref"    },
+  { time: "10:20", sender: IRC_BOT, ref: "RefA", msg: "!mp start 5 yw6cd3mf",                                               type: "ref"    },
   { time: "10:20", sender: "BanchoBot",          msg: "The match has started!",                                              type: "bancho" },
   { time: "10:37", sender: "BanchoBot",          msg: "Strawberry_Jam finished playing (Score: 987,432, PASSED).",           type: "bancho" },
   { time: "10:37", sender: "BanchoBot",          msg: "Blueberries_osu finished playing (Score: 854,201, PASSED).",         type: "bancho" },
@@ -84,7 +84,7 @@ export const IRC_LOG: IrcEntry[] = [
 ]
 
 export const BANCHO_COMMANDS = [
-  { label: "Start 10s", cmd: "!mp start 10"  },
+  { label: "Start 5s",  cmd: "!mp start 5"   },
   { label: "Timer 120", cmd: "!mp timer 120" },
   { label: "Abort",     cmd: "!mp abort"     },
   { label: "Invite A",  cmd: `!mp invite ${MATCH.playerA}` },

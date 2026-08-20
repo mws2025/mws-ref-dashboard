@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   addLobbyMod,
-  homeModIngredientCount,
+  formatLobbyTitle,
+  homeModIngredientAwards,
+  lobbyInviteTarget,
   lobbyModsForPool,
   nextPlayerAfterPick,
+  parseScoreValue,
   parseRollAnnouncement,
 } from "../src/lib/match-rules.ts"
 
@@ -46,9 +49,26 @@ describe("match progression", () => {
     expect(nextPlayerAfterPick("Player B", "Player A", "Player B")).toBe("Player A")
   })
 
-  test("doubles the base ingredient on a home-mod win", () => {
-    expect(homeModIngredientCount("HR", "Player A", "Player A", "Player B", "HR", "DT")).toBe(2)
-    expect(homeModIngredientCount("DT", "Player A", "Player A", "Player B", "HR", "DT")).toBe(1)
-    expect(homeModIngredientCount("DT", "Player B", "Player A", "Player B", "HR", "DT")).toBe(2)
+  test("awards one home ingredient on a loss and two on a win", () => {
+    expect(homeModIngredientAwards("HR", "Player A", "Player A", "Player B", "HR", "DT")).toEqual({ playerA: 2, playerB: 0 })
+    expect(homeModIngredientAwards("DT", "Player A", "Player A", "Player B", "HR", "DT")).toEqual({ playerA: 1, playerB: 1 })
+    expect(homeModIngredientAwards("DT", "Player B", "Player A", "Player B", "DT", "DT")).toEqual({ playerA: 1, playerB: 2 })
+  })
+})
+
+describe("referee input and lobby formatting", () => {
+  test("accepts score and accuracy formatting", () => {
+    expect(parseScoreValue("987,432")).toBe(987432)
+    expect(parseScoreValue("98.76%")).toBe(98.76)
+    expect(parseScoreValue(0)).toBe(0)
+    expect(parseScoreValue("")).toBeNull()
+    expect(parseScoreValue("%")).toBeNull()
+    expect(parseScoreValue("invalid")).toBeNull()
+  })
+
+  test("formats lobby names and invite targets", () => {
+    expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: [Player A] vs [Player B]")
+    expect(lobbyInviteTarget("WEARY", "12345")).toBe("#12345")
+    expect(lobbyInviteTarget("Cinnamon Twist")).toBe("Cinnamon_Twist")
   })
 })

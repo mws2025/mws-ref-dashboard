@@ -24,13 +24,13 @@ import type {
 
 const MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
 
-function isRecipeTimingOpen(recipe: Recipe, phase?: MatchFlowPhase): boolean {
+function isRecipeTimingOpen(recipe: Recipe, phase: MatchFlowPhase | undefined, hasPickedMap: boolean): boolean {
   if (!phase) return false
   const timing = recipe.timing.toLowerCase().replace(/[\s-]+/g, "_")
   return timing === "any" ||
     (timing === "ban_phase" && phase === "ban") ||
-    (timing === "pick_phase" && phase === "craft") ||
-    (timing === "before_map" && phase === "craft") ||
+    (timing === "pick_phase" && phase === "craft" && hasPickedMap) ||
+    (timing === "before_map" && phase === "craft" && hasPickedMap) ||
     (timing === "after_score" && phase === "play")
 }
 
@@ -82,11 +82,13 @@ function RecipeList({
   inventory,
   label,
   phase,
+  hasPickedMap,
   onActivate,
 }: {
   inventory: Inventory
   label: string
   phase?: MatchFlowPhase
+  hasPickedMap: boolean
   onActivate: (player: string, recipe: Recipe) => void
 }) {
   const affordable = RECIPES.filter((recipe) => canAfford(recipe, inventory))
@@ -117,7 +119,7 @@ function RecipeList({
                   size="sm"
                   className="flex-shrink-0 text-xs"
                   variant="secondary"
-                  disabled={!isRecipeTimingOpen(recipe, phase)}
+                  disabled={!isRecipeTimingOpen(recipe, phase, hasPickedMap)}
                   onClick={() => onActivate(label, recipe)}
                 >
                   Use
@@ -233,6 +235,7 @@ export function RecipePanel({
   const usedB = recipeEvents.filter((event) => event.player.toLowerCase() === labelB.toLowerCase())
   const availableMaps = mappool.filter((map) => map.status === "available")
   const bannedMaps = mappool.filter((map) => map.status === "banned")
+  const hasPickedMap = mappool.some((map) => map.status === "picked")
 
   function openActivation(player: string, recipe: Recipe) {
     setPending({ player, recipe })
@@ -253,12 +256,12 @@ export function RecipePanel({
       <div className="space-y-6">
         <div className="space-y-3">
           <RecipeEvents entries={usedA} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invA} label={labelA} phase={phase} onActivate={openActivation} />
+          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} onActivate={openActivation} />
         </div>
         <Separator />
         <div className="space-y-3">
           <RecipeEvents entries={usedB} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invB} label={labelB} phase={phase} onActivate={openActivation} />
+          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} onActivate={openActivation} />
         </div>
       </div>
 

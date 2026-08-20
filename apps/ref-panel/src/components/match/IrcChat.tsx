@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { IRC_BOT } from "@/data/mock"
+import { lobbyInviteTarget } from "@/lib/match-rules"
 
 export interface LiveMsg {
   ts: string
@@ -209,12 +210,12 @@ async function send(override?: string) {
         <p className="mb-1.5 text-xs uppercase tracking-[0.14em] text-muted-foreground">Quick commands</p>
         <div className="flex flex-wrap gap-1.5">
           {([
-            ...(playerA ? [{ label: `Invite ${playerA}`, cmd: `!mp invite #${playerAOsuId ?? playerA}`, immediate: true }] : []),
-            ...(playerB ? [{ label: `Invite ${playerB}`, cmd: `!mp invite #${playerBOsuId ?? playerB}`, immediate: true }] : []),
+            ...(playerA ? [{ label: `Invite ${playerA}`, cmd: `!mp invite ${lobbyInviteTarget(playerA, playerAOsuId)}`, immediate: true }] : []),
+            ...(playerB ? [{ label: `Invite ${playerB}`, cmd: `!mp invite ${lobbyInviteTarget(playerB, playerBOsuId)}`, immediate: true }] : []),
             { label: "Settings",    cmd: "!mp settings",  immediate: true  },
             { label: "Move player", cmd: "!mp move ",     immediate: false },
             { label: "Timer",       cmd: "!mp timer 120", immediate: true  },
-            { label: "Start",       cmd: "!mp start 10",  immediate: true  },
+            { label: "Start",       cmd: "!mp start 5",   immediate: true  },
             { label: "Abort",       cmd: "!mp abort",     immediate: true  },
           ] as { label: string; cmd: string; immediate: boolean }[]).map((c) => (
             <button

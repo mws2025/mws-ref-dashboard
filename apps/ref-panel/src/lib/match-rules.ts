@@ -57,20 +57,36 @@ export function nextPlayerAfterPick(pickedBy: string | undefined, playerA: strin
   return undefined
 }
 
-export function homeModIngredientCount(
+export function parseScoreValue(value: string | number): number | null {
+  const cleaned = typeof value === "string" ? value.trim().replace(/,/g, "").replace(/%$/, "").trim() : null
+  if (cleaned === "") return null
+  const normalized = typeof value === "number" ? value : Number(cleaned)
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : null
+}
+
+export function formatLobbyTitle(abbreviation: string, playerA: string, playerB: string): string {
+  return `${abbreviation.trim() || "MWS"}: [${playerA.trim()}] vs [${playerB.trim()}]`
+}
+
+export function lobbyInviteTarget(username: string, osuId?: string): string {
+  const normalizedId = osuId?.trim()
+  if (normalizedId && /^\d+$/.test(normalizedId)) return `#${normalizedId}`
+  return username.trim().replace(/\s+/g, "_")
+}
+
+export function homeModIngredientAwards(
   pool: string,
   winner: string,
   playerA: string,
   playerB: string,
   homeModA?: string,
   homeModB?: string,
-): number {
-  const normalizedWinner = winner.trim().toLowerCase()
-  const homeMod = normalizedWinner === playerA.trim().toLowerCase()
-    ? homeModA
-    : normalizedWinner === playerB.trim().toLowerCase()
-      ? homeModB
-      : undefined
-
-  return homeMod?.trim().toUpperCase() === pool.trim().toUpperCase() ? 2 : 1
+): { playerA: number; playerB: number } {
+  const normalizedPool = pool.trim().toUpperCase()
+  return {
+    playerA: (winner.trim().toLowerCase() === playerA.trim().toLowerCase() ? 1 : 0) +
+      (homeModA?.trim().toUpperCase() === normalizedPool ? 1 : 0),
+    playerB: (winner.trim().toLowerCase() === playerB.trim().toLowerCase() ? 1 : 0) +
+      (homeModB?.trim().toUpperCase() === normalizedPool ? 1 : 0),
+  }
 }

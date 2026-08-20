@@ -151,7 +151,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Live data: mappool + inventory + score pulled from API on mount.
 - [x] Skeleton loading for mappool rows, scores, inventory.
 - [x] MappoolTable: pool-color-coded rows, status badges with P1/P2 labels, muted-red for ban, muted-green for pick, muted-blue for protect. Banned maps strikethrough + opacity. `table-fixed` + `truncate` prevents map name overflow; title tooltip on hover.
-- [x] PlayerColumn: scores with ±1 edit buttons on WinBoxes row, win-box tracker, ingredient bar (collapsible, edit toggle), home mod selector with undo, match meta 2-col grid, lobby buttons.
+- [x] PlayerColumn: authoritative win-box tracker, ingredient bar (collapsible, edit toggle), home mod selector with undo, match meta 2-col grid, lobby buttons, and whole-match reset.
 - [x] Lobby buttons grouped with Separators: Setup | Result | Danger zones.
 - [x] Forfeit dialog: choose winner, sets score to -1 for loser.
 - [x] Join lobby: auto-sends `!mp settings` after join, parses BanchoBot room name, shows mismatch warning if room name doesn't contain both player names. Retry or continue anyway.
@@ -183,8 +183,11 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `POST /api/match/:id/state` stores rolls, order choice, and home mod choices.
 - [x] `POST /api/match/:id/action` enforces ban/pick phase + expected player before writing map actions.
 - [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column.
-- [x] Manual pick/ban order toggle defaults on, allowing free pick/ban/protect actions by either player; strict flow order can be enabled from Match Control.
-- [x] `POST /api/match/:id/score` writes map scores, marks map completed, advances phase, and distributes winner ingredient by map mod pool.
+- [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
+- [x] Picking opens a post-pick recipe window; `POST /api/match/:id/setup-map` binds both players' recipes and advances to play.
+- [x] `POST /api/match/:id/score` atomically writes map scores, inventories, recipe resolutions, and flow state; retries are idempotent.
+- [x] Home-mod pools award one bonus ingredient to their owner on either a win or loss.
+- [x] `POST /api/match/:id/reset` clears match state while preserving the lobby; completed maps can be unpicked with reward reversal.
 - [x] `POST /api/match/:id/post-result` writes final `matches` result and completes flow state.
 - [x] `PUT /api/match/:id/inventory` persists manual inventory edits.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
@@ -300,7 +303,9 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | GET | `/api/match/:id/state` | Done |
 | POST | `/api/match/:id/state` | Done |
 | POST | `/api/match/:id/action` | Done |
+| POST | `/api/match/:id/setup-map` | Done |
 | POST | `/api/match/:id/score` | Done, recipe-aware |
+| POST | `/api/match/:id/reset` | Done |
 | POST | `/api/match/:id/post-result` | Done |
 | POST | `/api/match/:id/forfeit` | Done |
 | GET | `/api/match/:id/recipes` | Done |
@@ -340,7 +345,7 @@ Planned but not registered: `GET /api/match/:id/mp-result` and `POST /api/match/
 | `src/components/LiveBadge.tsx` | Shared live indicator with animate-ping |
 | `src/components/match/MatchPanel.tsx` | Main match orchestrator — flow, persistent recipes, commands, scores, and lobby state |
 | `src/components/match/FlowPanel.tsx` | Ordered match flow controls: rolls, order choice, manual-order toggle, score entry |
-| `src/components/match/PlayerColumn.tsx` | Scores ±1, home mod (select/undo), ingredients (collapsible), lobby buttons, mismatch dialog |
+| `src/components/match/PlayerColumn.tsx` | Scores, home mod (select/undo), ingredients (collapsible), lobby/reset buttons, mismatch dialog |
 | `src/components/match/MappoolTable.tsx` | Map rows, pool colors, P1/P2 status, table-fixed truncation |
 | `src/components/match/MapActionModal.tsx` | Pick/ban/protect confirmation |
 | `src/components/match/IrcChat.tsx` | SSE chat, quick commands, simulatedMessages merge, timer bar |

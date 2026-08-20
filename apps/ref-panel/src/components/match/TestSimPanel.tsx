@@ -25,6 +25,10 @@ function Done() {
   return <span className="text-[10px] text-[#5f7f63]">✓</span>
 }
 
+function randomScore(min: number, range: number): number {
+  return min + Math.floor(Math.random() * range)
+}
+
 export function TestSimPanel({
   playerA, playerB, refName, mappool, channel, enforceNF,
   onInjectMessage, onGameResult, onUnlockPostResult,
@@ -65,14 +69,14 @@ export function TestSimPanel({
 
   function simulateResult(map: PoolMap, winner: string) {
     const loser = winner === playerA ? playerB : playerA
-    const winScore  = 800000 + Math.floor(Math.random() * 400000)
-    const loseScore = 400000 + Math.floor(Math.random() * Math.min(winScore - 400001, 350000))
+    const winScore = randomScore(800000, 400000)
+    const loseScore = randomScore(400000, Math.min(winScore - 400001, 350000))
 
     // Inject pick sequence commands
     if (map.beatmapId) onInjectMessage(IRC_BOT, `!mp map ${map.beatmapId} 0`, true)
     onInjectMessage(IRC_BOT, `!mp mods ${lobbyModsForPool(map.pool, enforceNF)}`, true)
     setTimeout(() => onInjectMessage(IRC_BOT, `!mp timer 120`, true), 300)
-    setTimeout(() => onInjectMessage(IRC_BOT, `!mp start 10`, true), 600)
+    setTimeout(() => onInjectMessage(IRC_BOT, `!mp start 5`, true), 600)
     setTimeout(() => {
       onInjectMessage("BanchoBot", `${winner} finished playing (Score: ${winScore.toLocaleString()}, PASSED).`)
       setTimeout(() => {

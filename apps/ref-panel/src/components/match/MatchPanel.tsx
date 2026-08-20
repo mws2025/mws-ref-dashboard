@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
-import { lobbyModsForPool, parseRollAnnouncement } from "@/lib/match-rules"
+import { formatLobbyTitle, lobbyModsForPool, parseRollAnnouncement } from "@/lib/match-rules"
 import type {
   HomeMod,
   IngKey,
@@ -111,13 +111,15 @@ function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null)
     case "roll":
       return "Wait for both players to roll, then save the rolls in Match Control."
     case "order":
-      return `${state.rollWinner ?? "Roll winner"} chooses pick-first or ban-first in Match Control.`
+      return `${state.rollWinner ?? "Roll winner"} chooses pick-first/ban-second or ban-first/pick-second in Match Control.`
     case "home_mod":
       return `${state.turnPlayer ?? "Next player"} chooses home mod in the left player column.`
     case "ban":
       return `${state.turnPlayer ?? "Next player"} bans an available map.`
     case "craft":
-      return `${state.turnPlayer ?? "Next player"} picks a map. Craft first if needed (Recipes tab).`
+      return currentMap
+        ? `Select recipes for ${currentMap.slot}, then set up the map in Match Control.`
+        : `${state.turnPlayer ?? "Next player"} picks a map.`
     case "play":
       return currentMap
         ? `Play ${currentMap.slot}; record scores in Match Control after both finish.`
@@ -148,14 +150,16 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [enforceNF, setEnforceNF] = useState(false)
   const [banOrder, setBanOrder] = useState("ABAB")
   const [rulesOpen, setRulesOpen] = useState(false)
-  const [liveLobbyUrl, setLiveLobbyUrl] = useState<string | undefined>(undefined)
+  const [liveLobbyUrl, setLiveLobbyUrl] = useState<string | undefined>(match.lobbyUrl)
   const [liveEvents, setLiveEvents] = useState<MatchEvent[]>([])
   const [flowState, setFlowState] = useState<MatchFlowState | null>(null)
   const [latestRolls, setLatestRolls] = useState<{ a?: number; b?: number }>({})
-  const [manualMapActions, setManualMapActions] = useState(true)
+  const [manualMapActions, setManualMapActions] = useState(false)
   const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
   const [testResultUnlocked, setTestResultUnlocked] = useState(false)
   const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
+  const [scoreSubmitting, setScoreSubmitting] = useState(false)
+  const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
@@ -163,6 +167,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const invSaveTimers = useRef<{ a: ReturnType<typeof setTimeout> | null; b: ReturnType<typeof setTimeout> | null }>({ a: null, b: null })
   const pendingRoomCheck = useRef(false)
   const abbreviationRef = useRef("MWS")
+  const stateActionQueue = useRef<Promise<void>>(Promise.resolve())
+  const stateActionVersion = useRef(0)
 
   function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
     const existing = invSaveTimers.current[player]
@@ -200,7 +206,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         if (!hasA || !hasB) {
           setLobbyNameMismatch({
             found: roomName,
-            expected: `${abbreviationRef.current}: ${match.playerA} vs ${match.playerB}`,
+            expected: formatLobbyTitle(abbreviationRef.current, match.playerA, match.playerB),
           })
         }
       }
@@ -266,22 +272,27 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     handleNewIrcMessage(msg)
   }
 
-  async function postStateAction(body: Record<string, unknown>, localState: MatchFlowState) {
+  function postStateAction(body: Record<string, unknown>, localState: MatchFlowState) {
+    const version = ++stateActionVersion.current
     setFlowState(localState)
-
-    const res = await fetch(`/api/match/${match.id}/state`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    const request = stateActionQueue.current.then(async () => {
+      const res = await fetch(`/api/match/${match.id}/state`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json() as { error?: string }
+        toast.error(err.error ?? "Failed to update match flow")
+        return
+      }
+      const data = await res.json() as { state?: MatchFlowState }
+      if (data.state && version === stateActionVersion.current) setFlowState(data.state)
     })
-    if (!res.ok) {
-      const err = await res.json() as { error?: string }
-      toast.error(err.error ?? "Failed to update match flow")
-      return
-    }
-    const data = await res.json() as { state?: MatchFlowState }
-    if (data.state) setFlowState(data.state)
+    stateActionQueue.current = request.catch(() => {
+      toast.error("Failed to update match flow")
+    })
   }
 
   function saveRolls(rollA: number, rollB: number) {
@@ -295,7 +306,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       turnPlayer: rollWinner,
       updatedAt: new Date().toISOString(),
     }
-    void postStateAction({ action: "record_rolls", rollA, rollB }, nextState)
+    postStateAction({ action: "record_rolls", rollA, rollB }, nextState)
   }
 
   function chooseOrder(choice: "pick_first" | "ban_first") {
@@ -313,7 +324,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       turnPlayer: firstPicker,
       updatedAt: new Date().toISOString(),
     }
-    void postStateAction({ action: "choose_order", choice }, nextState)
+    postStateAction({ action: "choose_order", choice }, nextState)
   }
 
   function setHomeMod(player: string, homeMod: HomeMod) {
@@ -329,7 +340,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     const nextState: MatchFlowState = otherHasHomeMod
       ? { ...next, phase: "ban", turnPlayer: next.firstBanner }
       : { ...next, phase: "home_mod", turnPlayer: other }
-    void postStateAction({ action: "set_home_mod", player, homeMod }, nextState)
+    postStateAction({ action: "set_home_mod", player, homeMod }, nextState)
   }
 
   function advanceLocalAfterMapAction(action: "pick" | "ban" | "protect", player: string, slot: string) {
@@ -358,8 +369,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
   }
 
-  function simulateGameResult(slot: string, winner: string, scoreA: number, scoreB: number) {
-    submitScore(slot, scoreA, scoreB, winner)
+  function simulateGameResult(slot: string, _winner: string, scoreA: number, scoreB: number) {
+    void submitScore(slot, scoreA, scoreB)
   }
 
   function applyCompletedMap(slot: string, winner: string) {
@@ -378,13 +389,16 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
   }
 
-  function submitScore(slot: string, scoreA: number, scoreB: number, selectedWinner: string) {
-    void fetch(`/api/match/${match.id}/score`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slot, scoreA, scoreB, winner: selectedWinner, playerA: match.playerA, playerB: match.playerB }),
-    }).then(async (res) => {
+  async function submitScore(slot: string, scoreA: number, scoreB: number) {
+    if (scoreSubmitting) return
+    setScoreSubmitting(true)
+    try {
+      const res = await fetch(`/api/match/${match.id}/score`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slot, scoreA, scoreB, playerA: match.playerA, playerB: match.playerB }),
+      })
       if (!res.ok) {
         const err = await res.json() as { error?: string }
         toast.error(err.error ?? "Failed to save score")
@@ -392,6 +406,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       }
       const data = await res.json() as {
         replayRequired?: boolean
+        alreadyCompleted?: boolean
         winner?: string
         totals?: { scoreA: number; scoreB: number }
         inventories?: { a: Inventory; b: Inventory }
@@ -412,9 +427,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       }
       const winner = data.winner
       if (!winner) return
-      if (winner.toLowerCase() !== selectedWinner.toLowerCase()) {
-        toast.info(`Recipe-adjusted winner: ${winner}`)
-      }
       applyCompletedMap(slot, winner)
       if (data.totals) {
         setLiveScoreA(data.totals.scoreA)
@@ -424,13 +436,21 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       if (data.state) setFlowState(data.state)
       for (const command of data.restoreCommands ?? []) ircRef.current?.send(command)
       const nextPicker = data.nextPicker ?? opponentOf(winner, match.playerA, match.playerB)
-      announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker)
+      if (data.alreadyCompleted) {
+        toast.info("This map score was already saved; match state refreshed")
+      } else {
+        announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker)
+      }
       const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
       if (recipesRes.ok) {
         const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
         setRecipeEvents(recipesData.events ?? [])
       }
-    })
+    } catch {
+      toast.error("Failed to save score")
+    } finally {
+      setScoreSubmitting(false)
+    }
   }
 
   async function refreshRecipeSurfaces() {
@@ -446,8 +466,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       setRecipeEvents(data.events ?? [])
     }
     if (mappoolRes.ok) {
-      const data = await mappoolRes.json() as { mappool?: PoolMap[] }
+      const data = await mappoolRes.json() as { mappool?: PoolMap[]; scoreA?: number; scoreB?: number }
       if (data.mappool) setLiveMappool(data.mappool)
+      if (typeof data.scoreA === "number") setLiveScoreA(data.scoreA)
+      if (typeof data.scoreB === "number") setLiveScoreB(data.scoreB)
     }
   }
 
@@ -501,7 +523,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       turnPlayer: player,
       updatedAt: new Date().toISOString(),
     }
-    void postStateAction({ action: "set_home_mod", player, homeMod: null }, next)
+    postStateAction({ action: "set_home_mod", player, homeMod: null }, next)
   }
 
   function postMatchResult() {
@@ -525,6 +547,40 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     })
   }
 
+  async function resetMatch() {
+    const res = await fetch(`/api/match/${match.id}/reset`, {
+      method: "POST",
+      credentials: "include",
+    })
+    if (!res.ok) {
+      const error = await res.json() as { error?: string }
+      toast.error(error.error ?? "Failed to reset match")
+      return
+    }
+    const data = await res.json() as {
+      state?: MatchFlowState
+      status?: Match["status"]
+      totals?: { scoreA: number; scoreB: number }
+      inventories?: { a: Inventory; b: Inventory }
+    }
+    setLiveScoreA(data.totals?.scoreA ?? 0)
+    setLiveScoreB(data.totals?.scoreB ?? 0)
+    if (data.inventories) setLiveInventory(data.inventories)
+    if (data.state) setFlowState(data.state)
+    if (data.status) setLiveMatchStatus(data.status)
+    setLiveMappool((current) => current?.map((map) => ({
+      ...map,
+      status: "available",
+      pickedBy: undefined,
+      bannedBy: undefined,
+      winner: undefined,
+    })) ?? null)
+    setRecipeEvents([])
+    setLatestRolls({})
+    setSelectedMap(null)
+    toast.success("Match reset")
+  }
+
   async function sendIrc(channel: string, message: string) {
     await fetch("/api/irc/send", {
       method: "POST",
@@ -540,6 +596,33 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     await sendIrc(channel, `!mp mods ${recipeSetup?.mods || lobbyModsForPool(map.pool, enforceNF)}`)
     for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
     await sendIrc(channel, "!mp timer 120")
+  }
+
+  async function setupPickedMap(map: PoolMap) {
+    if (setupSubmitting) return
+    setSetupSubmitting(true)
+    try {
+      const res = await fetch(`/api/match/${match.id}/setup-map`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slot: map.slot }),
+      })
+      if (!res.ok) {
+        const error = await res.json() as { error?: string }
+        toast.error(error.error ?? "Failed to set up map")
+        return
+      }
+      const data = await res.json() as { state?: MatchFlowState; recipeSetup?: RecipePickSetup }
+      if (data.state) setFlowState(data.state)
+      const channel = lobbyUrlToChannel(liveLobbyUrl)
+      if (channel) await sendPickSequence(map, channel, data.recipeSetup)
+      await refreshRecipeSurfaces()
+    } catch {
+      toast.error("Failed to set up map")
+    } finally {
+      setSetupSubmitting(false)
+    }
   }
 
   async function createLobby() {
@@ -736,6 +819,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
               else setLiveScoreA(-1)
             })
           }}
+          onResetMatch={() => void resetMatch()}
           homeModA={flowState?.homeModA}
           homeModB={flowState?.homeModB}
           homeModTurnPlayer={flowState?.phase === "home_mod" ? flowState.turnPlayer : undefined}
@@ -746,8 +830,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           isDemo={isDemo}
           postResultReady={flowState?.phase === "ready_result"}
           testResultUnlocked={testResultUnlocked}
-          onScoreAEdit={(val) => setLiveScoreA(val)}
-          onScoreBEdit={(val) => setLiveScoreB(val)}
         />
 
         <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
@@ -801,6 +883,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 onManualMapActionsChange={setManualMapActions}
                 onSaveRolls={saveRolls}
                 onChooseOrder={chooseOrder}
+                onSetupMap={(map) => void setupPickedMap(map)}
+                setupSubmitting={setupSubmitting}
+                scoreSubmitting={scoreSubmitting}
                 onSubmitScore={submitScore}
               />
               <Separator className="my-4" />
@@ -867,10 +952,12 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         playerA={match.playerA}
         playerB={match.playerB}
         allowedActions={
-          selectedMap?.status === "picked"
+          selectedMap?.status === "picked" || selectedMap?.status === "completed"
             ? ["unpick"]
             : selectedMap?.status !== "available"
             ? []
+            : flowState?.currentSlot
+              ? []
             : manualMapActions
               ? undefined
               : flowState?.phase === "ban"
@@ -881,16 +968,18 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         }
         expectedPlayer={selectedMap?.status === "available" && !manualMapActions ? flowState?.turnPlayer : undefined}
         helperText={
-          selectedMap?.status === "picked"
-            ? "Remove this pick and return the map to available."
+          selectedMap?.status === "picked" || selectedMap?.status === "completed"
+            ? "Remove this played pick and return the map to available."
             : selectedMap?.status !== "available"
             ? "This map is already locked."
+            : flowState?.currentSlot
+              ? `Finish or unpick ${flowState.currentSlot} before choosing another map.`
             : manualMapActions
               ? "Manual order is on. Either player can pick, ban, or protect."
               : flowState?.phase === "ban" && flowState.turnPlayer
               ? `${flowState.turnPlayer} must ban next.`
               : flowState?.phase === "craft" && flowState.turnPlayer
-                ? `${flowState.turnPlayer} to pick. Craft is optional.`
+                ? `${flowState.turnPlayer} to pick.`
                 : "Finish the current flow phase before choosing a map."
         }
         onClose={() => setSelectedMap(null)}
@@ -900,20 +989,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           if (action !== "unpick" && !player) return
           setSelectedMap(null)
 
-          // optimistic update
-          setLiveMappool((prev) => prev ? prev.map((m) => {
-            if (m.slot !== map.slot) return m
-            if (action === "unpick") {
-              return { ...m, status: "available", pickedBy: undefined, winner: undefined }
-            }
-            return {
-              ...m,
-              status: action === "pick" ? "picked" : action === "ban" ? "banned" : "protected",
-              ...(action === "pick" ? { pickedBy: player } : {}),
-              ...(action === "ban" ? { bannedBy: player } : {}),
-            }
-          }) : prev)
-
           void fetch(`/api/match/${match.id}/action`, {
             method: "POST",
             credentials: "include",
@@ -921,13 +996,23 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             body: JSON.stringify({ action, player, slot: map.slot, manualOrder: manualMapActions }),
           }).then(async (res) => {
             if (!res.ok) {
-              // revert optimistic update on failure
-              setLiveMappool((prev) => prev ? prev.map((m) => m.slot === map.slot ? map : m) : prev)
               const err = await res.json() as { error?: string }
               toast.error(err.error ?? "Action failed")
               return
             }
             const data = await res.json() as { state?: MatchFlowState; recipeSetup?: RecipePickSetup }
+            setLiveMappool((prev) => prev ? prev.map((current) => {
+              if (current.slot !== map.slot) return current
+              if (action === "unpick") {
+                return { ...current, status: "available", pickedBy: undefined, bannedBy: undefined, winner: undefined }
+              }
+              return {
+                ...current,
+                status: action === "pick" ? "picked" : action === "ban" ? "banned" : "protected",
+                ...(action === "pick" ? { pickedBy: player } : {}),
+                ...(action === "ban" ? { bannedBy: player } : {}),
+              }
+            }) : prev)
             if (data.state) setFlowState(data.state)
             else if (action === "unpick") {
               setFlowState((prev) => prev?.currentSlot === map.slot
@@ -936,12 +1021,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             }
             else if (!manualMapActions && player) advanceLocalAfterMapAction(action, player, map.slot)
 
-            if (action === "pick") {
-              const channel = lobbyUrlToChannel(liveLobbyUrl)
-              if (channel) await sendPickSequence(map, channel, data.recipeSetup)
-            }
             await refreshRecipeSurfaces()
-          })
+          }).catch(() => toast.error("Action failed"))
         }}
       />
     </div>

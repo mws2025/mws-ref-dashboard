@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
-import { isValidRoll } from "@/lib/match-rules"
+import { isValidRoll, parseScoreValue } from "@/lib/match-rules"
 import type { MatchFlowState, PoolMap } from "@/types"
 
 interface Props {
@@ -19,7 +19,10 @@ interface Props {
   onManualMapActionsChange: (enabled: boolean) => void
   onSaveRolls: (rollA: number, rollB: number) => void
   onChooseOrder: (choice: "pick_first" | "ban_first") => void
-  onSubmitScore: (slot: string, scoreA: number, scoreB: number, winner: string) => void
+  onSetupMap: (map: PoolMap) => void
+  setupSubmitting?: boolean
+  scoreSubmitting?: boolean
+  onSubmitScore: (slot: string, scoreA: number, scoreB: number) => void
 }
 
 const PHASE_LABEL: Record<MatchFlowState["phase"], string> = {
@@ -53,6 +56,9 @@ export function FlowPanel({
   onManualMapActionsChange,
   onSaveRolls,
   onChooseOrder,
+  onSetupMap,
+  setupSubmitting = false,
+  scoreSubmitting = false,
   onSubmitScore,
 }: Props) {
   const currentMap = !mappool
@@ -79,9 +85,9 @@ export function FlowPanel({
   const winsNeeded = Math.ceil(bestOf / 2)
   const scoreInputA = scoreEntry.slot === currentSlotKey ? scoreEntry.a : ""
   const scoreInputB = scoreEntry.slot === currentSlotKey ? scoreEntry.b : ""
-  const parsedScoreA = Number(scoreInputA)
-  const parsedScoreB = Number(scoreInputB)
-  const canSubmitScore = currentMap && Number.isFinite(parsedScoreA) && Number.isFinite(parsedScoreB)
+  const parsedScoreA = parseScoreValue(scoreInputA)
+  const parsedScoreB = parseScoreValue(scoreInputB)
+  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && parsedScoreA !== parsedScoreB
 
   return (
     <div className="space-y-4">
@@ -94,13 +100,14 @@ export function FlowPanel({
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           {state.phase === "ban" && state.turnPlayer ? `${state.turnPlayer} bans next.` : null}
-          {state.phase === "craft" && state.turnPlayer ? `${state.turnPlayer} picks a map. Craft first if needed (Recipes tab).` : null}
+          {state.phase === "craft" && currentMap ? `${currentMap.slot} is picked. Select recipes, then set up the map.` : null}
+          {state.phase === "craft" && !currentMap && state.turnPlayer ? `${state.turnPlayer} picks a map.` : null}
           {state.phase === "play" && currentMap ? `${currentMap.slot} is in play. Record the score after both players finish.` : null}
           {state.phase === "ready_result" ? "Match point target reached. Post the result from the left panel." : null}
           {state.phase === "completed" ? "Final result has been posted." : null}
           {state.phase === "lobby" ? "Create or join the osu! lobby from the left panel." : null}
           {state.phase === "roll" ? "Wait for both player rolls, then save them here." : null}
-          {state.phase === "order" ? `${state.rollWinner ?? rollWinner ?? "Roll winner"} chooses whether to pick first or ban first.` : null}
+          {state.phase === "order" ? `${state.rollWinner ?? rollWinner ?? "Roll winner"} chooses one order; the other player receives the remaining order.` : null}
           {state.phase === "home_mod" && state.turnPlayer ? `${state.turnPlayer} chooses home mod in the player column.` : null}
         </p>
       </div>
@@ -184,8 +191,8 @@ export function FlowPanel({
         <div className="space-y-2">
           <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">{rollWinner}</p>
           <div className="grid grid-cols-2 gap-2">
-            <Button size="sm" variant="outline" className="text-xs" onClick={() => onChooseOrder("pick_first")}>Pick first</Button>
-            <Button size="sm" variant="outline" className="text-xs" onClick={() => onChooseOrder("ban_first")}>Ban first</Button>
+            <Button size="sm" variant="outline" className="h-auto min-h-8 whitespace-normal text-xs" onClick={() => onChooseOrder("pick_first")}>Pick first / ban second</Button>
+            <Button size="sm" variant="outline" className="h-auto min-h-8 whitespace-normal text-xs" onClick={() => onChooseOrder("ban_first")}>Ban first / pick second</Button>
           </div>
         </div>
       )}
@@ -194,10 +201,17 @@ export function FlowPanel({
         <div className="space-y-2">
           <Separator />
           <p className="text-xs text-muted-foreground">
-            {manualMapActions
+            {state.phase === "craft" && currentMap
+              ? "Before-map and pick-phase recipes are open. Set up the map when both players are ready."
+              : manualMapActions
               ? "Select an available map in the pool table. Any player can pick, ban, or protect."
               : "Select an available map in the pool table. Only the expected player/action is enabled."}
           </p>
+          {state.phase === "craft" && currentMap && (
+            <Button size="sm" className="w-full text-xs" disabled={setupSubmitting} onClick={() => onSetupMap(currentMap)}>
+              {setupSubmitting ? "Setting up..." : `Set up ${currentMap.slot}`}
+            </Button>
+          )}
         </div>
       )}
 
@@ -228,26 +242,14 @@ export function FlowPanel({
               />
             </label>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-xs"
-              disabled={!canSubmitScore}
-              onClick={() => currentMap && onSubmitScore(currentMap.slot, parsedScoreA, parsedScoreB, playerA)}
-            >
-              {playerA} wins
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-xs"
-              disabled={!canSubmitScore}
-              onClick={() => currentMap && onSubmitScore(currentMap.slot, parsedScoreA, parsedScoreB, playerB)}
-            >
-              {playerB} wins
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            className="w-full text-xs"
+            disabled={!canSubmitScore || scoreSubmitting}
+            onClick={() => currentMap && parsedScoreA !== null && parsedScoreB !== null && onSubmitScore(currentMap.slot, parsedScoreA, parsedScoreB)}
+          >
+            {scoreSubmitting ? "Submitting..." : "Submit scores"}
+          </Button>
         </div>
       )}
 
