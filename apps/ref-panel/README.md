@@ -226,7 +226,8 @@ const snapshot = await response.json()
 ```
 
 The response contains `players`, picked and banned `maps`, `score`/`stars`, current `ingredients`, and per-side recipe
-`current`, `previous`, and `active` values. It returns `Access-Control-Allow-Origin: *` and a two-second public cache.
+values. `current` is the latest active recipe or `null`; `previous` is an array of resolved recipes; and `active` is an
+array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a two-second public cache.
 
 ### Authentication Routes
 

@@ -1596,10 +1596,10 @@ function publicSnapshotRecipesForPlayer(
   )
   const activeEvents = playerEvents.filter((event) => event.status === "active")
   const current = activeEvents.at(-1)
-  const previous = playerEvents.filter((event) => event.status === "resolved").at(-1)
+  const previousEvents = playerEvents.filter((event) => event.status === "resolved")
   return {
     current: current ? publicSnapshotRecipe(current, items) : null,
-    previous: previous ? publicSnapshotRecipe(previous, items) : null,
+    previous: previousEvents.map((event) => publicSnapshotRecipe(event, items)),
     active: activeEvents.map((event) => publicSnapshotRecipe(event, items)),
   }
 }
