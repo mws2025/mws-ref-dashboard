@@ -43,6 +43,11 @@ interface RecipePickSetup {
   mapTitle?: string
 }
 
+interface ScoreSubmitOutcome {
+  replayRequired: boolean
+  alreadyCompleted: boolean
+}
+
 interface MatchEvent {
   id: string
   ts: string
@@ -171,8 +176,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [flowState, setFlowState] = useState<MatchFlowState | null>(null)
   const [latestRolls, setLatestRolls] = useState<{ a?: number; b?: number }>({})
   const [manualMapActions, setManualMapActions] = useState(false)
-  const [simulatedIrcMessages, setSimulatedIrcMessages] = useState<LiveMsg[]>([])
-  const [testResultUnlocked, setTestResultUnlocked] = useState(false)
   const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
   const [scoreSubmitting, setScoreSubmitting] = useState(false)
   const [setupSubmitting, setSetupSubmitting] = useState(false)
@@ -296,12 +299,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     void load()
   }, [liveLobbyUrl, match])
 
-  function injectIrcMsg(from: string, message: string, local = false) {
-    const msg: LiveMsg = { ts: new Date().toISOString(), from, message, ...(local ? { local: true } : {}) }
-    setSimulatedIrcMessages(prev => [...prev, msg])
-    handleNewIrcMessage(msg)
-  }
-
   function postStateAction(body: Record<string, unknown>, localState: MatchFlowState) {
     const version = ++stateActionVersion.current
     setFlowState(localState)
@@ -399,10 +396,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
   }
 
-  function simulateGameResult(slot: string, _winner: string, scoreA: number, scoreB: number) {
-    void submitScore(slot, scoreA, scoreB)
-  }
-
   function applyCompletedMap(slot: string, winner: string) {
     setLiveMappool(prev => prev ? prev.map(m =>
       m.slot === slot ? { ...m, status: "completed", winner } : m
@@ -424,8 +417,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
   }
 
-  async function submitScore(slot: string, scoreA: number, scoreB: number) {
-    if (scoreSubmitting) return
+  async function submitScore(slot: string, scoreA: number, scoreB: number): Promise<ScoreSubmitOutcome | null> {
+    if (scoreSubmitting) return null
     setScoreSubmitting(true)
     try {
       const res = await fetch(`/api/match/${match.id}/score`, {
@@ -437,7 +430,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       if (!res.ok) {
         const err = await res.json() as { error?: string }
         toast.error(err.error ?? "Failed to save score")
-        return
+        return null
       }
       const data = await res.json() as {
         replayRequired?: boolean
@@ -459,10 +452,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           setRecipeEvents(recipesData.events ?? [])
         }
         setDetectedScores((current) => ({ slot, run: current.slot === slot ? current.run + 1 : 1 }))
-        return
+        return { replayRequired: true, alreadyCompleted: false }
       }
       const winner = data.winner
-      if (!winner) return
+      if (!winner) return null
       applyCompletedMap(slot, winner)
       if (data.totals) {
         setLiveScoreA(data.totals.scoreA)
@@ -483,8 +476,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
         setRecipeEvents(recipesData.events ?? [])
       }
+      return { replayRequired: false, alreadyCompleted: Boolean(data.alreadyCompleted) }
     } catch {
       toast.error("Failed to save score")
+      return null
     } finally {
       setScoreSubmitting(false)
     }
@@ -909,7 +904,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           hasLobby={liveLobbyUrl !== undefined}
           isDemo={isDemo}
           postResultReady={flowState?.phase === "ready_result"}
-          testResultUnlocked={testResultUnlocked}
+          testResultUnlocked={false}
         />
 
         <div style={{ width: poolWidth, flexShrink: 0 }} className="flex flex-col overflow-hidden">
@@ -931,7 +926,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 <TabsTrigger value="control" className="flex-1 text-xs">Match Control</TabsTrigger>
                 <TabsTrigger value="irc"     className="flex-1 text-xs">IRC</TabsTrigger>
                 <TabsTrigger value="recipes" className="flex-1 text-xs">Recipes</TabsTrigger>
-                {testMode && <TabsTrigger value="sim" className="flex-1 text-xs text-amber-700 dark:text-amber-400">Sim</TabsTrigger>}
+                {testMode && <TabsTrigger value="sim" className="flex-1 text-xs text-amber-700 dark:text-amber-400">Integration</TabsTrigger>}
               </TabsList>
             </div>
 
@@ -1008,7 +1003,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 isDemo={isDemo}
                 isTestMode={testMode}
                 nextActionHint={nextActionHint(flowState, liveMappool)}
-                simulatedMessages={simulatedIrcMessages}
                 onMessagesChange={(msgs) => { ircMessagesRef.current = msgs }}
                 onNewMessage={handleNewIrcMessage}
               />
@@ -1017,15 +1011,21 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             {testMode && (
               <TabsContent value="sim" className="flex-1 overflow-y-auto p-4">
                 <TestSimPanel
+                  matchId={match.id}
                   playerA={match.playerA}
                   playerB={match.playerB}
-                  refName={match.referee ?? "Referee"}
-                  mappool={liveMappool}
-                  channel={lobbyUrlToChannel(liveLobbyUrl)}
-                  enforceNF={enforceNF}
-                  onInjectMessage={injectIrcMsg}
-                  onGameResult={simulateGameResult}
-                  onUnlockPostResult={() => setTestResultUnlocked(true)}
+                  playerAOsuId={match.playerAOsuId}
+                  playerBOsuId={match.playerBOsuId}
+                  binding={flowState?.testBinding}
+                  currentSlot={flowState?.currentSlot}
+                  scoreSubmitting={scoreSubmitting}
+                  onBindingChange={(testBinding) => setFlowState((current) => current ? {
+                    ...current,
+                    phase: current.phase === "lobby" && testBinding ? "roll" : current.phase,
+                    testBinding,
+                  } : current)}
+                  onLobbyChange={setLiveLobbyUrl}
+                  onApplyScore={submitScore}
                 />
               </TabsContent>
             )}

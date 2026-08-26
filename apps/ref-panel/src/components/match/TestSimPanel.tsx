@@ -1,234 +1,295 @@
 import { useState } from "react"
+import { CheckCircle2, ExternalLink, Link2, RefreshCw, SkipForward, Unlink, XCircle } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import { IRC_BOT } from "@/data/mock"
-import { lobbyModsForPool } from "@/lib/match-rules"
-import type { PoolMap } from "@/types"
+import type { MatchFlowState, TestMpBinding, TestMpProbe, TestMpResult } from "@/types"
+
+interface ScoreSubmitOutcome {
+  replayRequired: boolean
+  alreadyCompleted: boolean
+}
 
 interface Props {
+  matchId: string
   playerA: string
   playerB: string
-  refName: string
-  mappool: PoolMap[] | null
-  channel: string | undefined
-  enforceNF: boolean
-  onInjectMessage: (from: string, message: string, local?: boolean) => void
-  onGameResult: (slot: string, winner: string, scoreA: number, scoreB: number) => void
-  onUnlockPostResult: () => void
+  playerAOsuId?: string
+  playerBOsuId?: string
+  binding?: TestMpBinding
+  currentSlot?: string
+  scoreSubmitting: boolean
+  onBindingChange: (binding: TestMpBinding | undefined) => void
+  onLobbyChange: (lobbyUrl: string) => void
+  onApplyScore: (slot: string, scoreA: number, scoreB: number) => Promise<ScoreSubmitOutcome | null>
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{children}</p>
-}
-
-function Done() {
-  return <span className="text-[10px] text-[#5f7f63]">✓</span>
-}
-
-function randomScore(min: number, range: number): number {
-  return min + Math.floor(Math.random() * range)
+function apiError(value: unknown, fallback: string): string {
+  return typeof value === "object" && value !== null && "error" in value && typeof value.error === "string"
+    ? value.error
+    : fallback
 }
 
 export function TestSimPanel({
-  playerA, playerB, refName, mappool, channel, enforceNF,
-  onInjectMessage, onGameResult, onUnlockPostResult,
+  matchId,
+  playerA,
+  playerB,
+  playerAOsuId,
+  playerBOsuId,
+  binding,
+  currentSlot,
+  scoreSubmitting,
+  onBindingChange,
+  onLobbyChange,
+  onApplyScore,
 }: Props) {
-  const [joinsSimulated, setJoinsSimulated] = useState(false)
-  const [rollsDone, setRollsDone] = useState(false)
-  const [rollA, setRollA] = useState<number | null>(null)
-  const [rollB, setRollB] = useState<number | null>(null)
-  const [resultUnlocked, setResultUnlocked] = useState(false)
-  const [resultedSlots, setResultedSlots] = useState<Set<string>>(new Set())
+  const [mpInput, setMpInput] = useState(binding ? String(binding.mpId) : "")
+  const [mode, setMode] = useState<"replay" | "live">(binding?.mode ?? "replay")
+  const [probe, setProbe] = useState<TestMpProbe | null>(null)
+  const [playerAId, setPlayerAId] = useState("")
+  const [playerBId, setPlayerBId] = useState("")
+  const [result, setResult] = useState<TestMpResult | null>(null)
+  const [busy, setBusy] = useState<"probe" | "bind" | "check" | "apply" | "skip" | "detach" | null>(null)
 
-  const hasChannel = Boolean(channel)
-  const availableMaps = mappool?.filter(m => m.status === "available") ?? []
-  const activePicks   = mappool?.filter(m => m.status === "picked" && !resultedSlots.has(m.slot)) ?? []
-
-  function simulateJoins() {
-    onInjectMessage("BanchoBot", `${playerA} joined in slot 1.`)
-    setTimeout(() => onInjectMessage("BanchoBot", `${playerB} joined in slot 2.`), 800)
-    setJoinsSimulated(true)
+  async function inspectLobby() {
+    setBusy("probe")
+    setResult(null)
+    try {
+      const response = await fetch(`/api/match/${matchId}/test/mp-probe`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mp: mpInput }),
+      })
+      const data = await response.json() as TestMpProbe | { error?: string }
+      if (!response.ok || !("users" in data)) {
+        toast.error(apiError(data, "Could not inspect osu! lobby"))
+        return
+      }
+      setProbe(data)
+      const configuredA = Number(playerAOsuId)
+      const configuredB = Number(playerBOsuId)
+      setPlayerAId(String(data.users.some((user) => user.id === configuredA) ? configuredA : data.users[0]?.id ?? ""))
+      setPlayerBId(String(data.users.some((user) => user.id === configuredB) ? configuredB : data.users.find((user) => user.id !== configuredA)?.id ?? data.users[1]?.id ?? ""))
+    } catch {
+      toast.error("Could not inspect osu! lobby")
+    } finally {
+      setBusy(null)
+    }
   }
 
-  function simulateRolls() {
-    const a = Math.floor(Math.random() * 100) + 1
-    const b = Math.floor(Math.random() * 100) + 1
-    setRollA(a); setRollB(b)
-    onInjectMessage("BanchoBot", `${playerA} rolls ${a} point(s)`)
-    setTimeout(() => onInjectMessage("BanchoBot", `${playerB} rolls ${b} point(s)`), 600)
-    setRollsDone(true)
+  async function bindLobby() {
+    if (!probe || !playerAId || !playerBId) return
+    setBusy("bind")
+    try {
+      const response = await fetch(`/api/match/${matchId}/test/mp-binding`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mpId: probe.mpId,
+          mode,
+          playerAOsuId: Number(playerAId),
+          playerBOsuId: Number(playerBId),
+        }),
+      })
+      const data = await response.json() as { binding?: TestMpBinding; lobbyUrl?: string; error?: string }
+      if (!response.ok || !data.binding) {
+        toast.error(data.error ?? "Could not bind osu! lobby")
+        return
+      }
+      onBindingChange(data.binding)
+      onLobbyChange(data.lobbyUrl ?? `https://osu.ppy.sh/mp/${data.binding.mpId}`)
+      setResult(null)
+      toast.success(`Bound mp#${data.binding.mpId}`)
+    } catch {
+      toast.error("Could not bind osu! lobby")
+    } finally {
+      setBusy(null)
+    }
   }
 
-  function simulateBanChat(player: string, slot: string) {
-    onInjectMessage(player, `ban ${slot}`)
+  async function checkNextGame() {
+    setBusy("check")
+    try {
+      const response = await fetch(`/api/match/${matchId}/test/mp-result`, { credentials: "include" })
+      const data = await response.json() as TestMpResult | { error?: string }
+      if (!response.ok || !("pending" in data)) {
+        toast.error(apiError(data, "Could not verify osu! game"))
+        return
+      }
+      setResult(data)
+      if (data.pending) toast.info(data.message ?? "No new osu! game is available yet")
+    } catch {
+      toast.error("Could not verify osu! game")
+    } finally {
+      setBusy(null)
+    }
   }
 
-  function injectPickNext(player: string) {
-    onInjectMessage(IRC_BOT, `<${refName}>: ${player} to pick next!`, true)
+  async function consumeGame(keepExpected: boolean): Promise<boolean> {
+    if (!result?.game) return false
+    const response = await fetch(`/api/match/${matchId}/test/mp-result/consume`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gameId: result.game.id, keepExpected }),
+    })
+    const data = await response.json() as { state?: MatchFlowState; error?: string }
+    if (!response.ok || !data.state?.testBinding) {
+      toast.error(data.error ?? "Could not advance osu! game cursor")
+      return false
+    }
+    onBindingChange(data.state.testBinding)
+    setResult(null)
+    return true
   }
 
-  function simulateResult(map: PoolMap, winner: string) {
-    const loser = winner === playerA ? playerB : playerA
-    const winScore = randomScore(800000, 400000)
-    const loseScore = randomScore(400000, Math.min(winScore - 400001, 350000))
+  async function applyVerifiedResult() {
+    const slot = result?.slot
+    const scoreA = result?.values?.scoreA
+    const scoreB = result?.values?.scoreB
+    if (!result?.canApply || !slot || scoreA == null || scoreB == null) return
+    setBusy("apply")
+    try {
+      const outcome = await onApplyScore(slot, scoreA, scoreB)
+      if (!outcome) return
+      if (await consumeGame(outcome.replayRequired)) {
+        toast.success(outcome.replayRequired ? "Verified run applied; replay remains open" : "Verified osu! result applied")
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
 
-    // Inject pick sequence commands
-    if (map.beatmapId) onInjectMessage(IRC_BOT, `!mp map ${map.beatmapId} 0`, true)
-    onInjectMessage(IRC_BOT, `!mp mods ${lobbyModsForPool(map.pool, enforceNF)}`, true)
-    setTimeout(() => onInjectMessage(IRC_BOT, `!mp timer 120`, true), 300)
-    setTimeout(() => onInjectMessage(IRC_BOT, `!mp start 5`, true), 600)
-    setTimeout(() => {
-      onInjectMessage("BanchoBot", `${winner} finished playing (Score: ${winScore.toLocaleString()}, PASSED).`)
-      setTimeout(() => {
-        onInjectMessage("BanchoBot", `${loser} finished playing (Score: ${loseScore.toLocaleString()}, PASSED).`)
-      }, 350)
-    }, 1000)
+  async function skipGame() {
+    setBusy("skip")
+    try {
+      if (await consumeGame(true)) toast.success("Recorded game skipped")
+    } finally {
+      setBusy(null)
+    }
+  }
 
-    setResultedSlots(prev => new Set([...prev, map.slot]))
-    onGameResult(
-      map.slot,
-      winner,
-      winner === playerA ? winScore : loseScore,
-      winner === playerB ? winScore : loseScore,
-    )
+  async function detachLobby() {
+    setBusy("detach")
+    try {
+      const response = await fetch(`/api/match/${matchId}/test/mp-binding`, {
+        method: "DELETE",
+        credentials: "include",
+      })
+      const data = await response.json() as { error?: string }
+      if (!response.ok) {
+        toast.error(data.error ?? "Could not detach osu! lobby")
+        return
+      }
+      onBindingChange(undefined)
+      setProbe(null)
+      setResult(null)
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
-    <div className="space-y-5">
-      <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Simulation</p>
-
-      {/* Lobby joins */}
-      <div className="space-y-1.5">
-        <p className="flex items-center gap-1.5">
-          <SectionLabel>Lobby</SectionLabel>
-          {joinsSimulated && <Done />}
-        </p>
-        <Button
-          size="sm" variant="outline" className="w-full text-xs"
-          disabled={!hasChannel || joinsSimulated}
-          onClick={simulateJoins}
-        >
-          Simulate player joins
-        </Button>
-      </div>
-
-      <Separator />
-
-      {/* Rolls */}
-      <div className="space-y-1.5">
-        <p className="flex items-center gap-1.5">
-          <SectionLabel>Rolls</SectionLabel>
-          {rollsDone && <Done />}
-        </p>
-        <Button
-          size="sm" variant="outline" className="w-full text-xs"
-          disabled={!hasChannel || rollsDone}
-          onClick={simulateRolls}
-        >
-          Simulate rolls
-        </Button>
-        {rollA !== null && rollB !== null && (
-          <div className="rounded-md border border-border/60 bg-card/40 px-2.5 py-2 space-y-0.5">
-            <p className="text-xs text-muted-foreground">{playerA} <span className="font-semibold tabular-nums text-foreground">{rollA}</span></p>
-            <p className="text-xs text-muted-foreground">{playerB} <span className="font-semibold tabular-nums text-foreground">{rollB}</span></p>
-            <p className="text-[10px] text-muted-foreground/50">
-              {rollA === rollB ? "Tie - re-roll needed" : `${rollA > rollB ? playerA : playerB} picks first`}
-            </p>
-          </div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">osu! integration test</p>
+        {binding && (
+          <a href={`https://osu.ppy.sh/mp/${binding.mpId}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-mono text-[10px] text-primary hover:underline">
+            mp#{binding.mpId}<ExternalLink className="size-3" />
+          </a>
         )}
       </div>
 
-      <Separator />
+      {!binding ? (
+        <div className="space-y-3">
+          <label className="space-y-1">
+            <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">MP link or ID</span>
+            <div className="flex gap-2">
+              <Input value={mpInput} onChange={(event) => setMpInput(event.target.value)} placeholder="https://osu.ppy.sh/mp/123456" />
+              <Button size="icon" variant="outline" onClick={() => void inspectLobby()} disabled={!mpInput.trim() || busy !== null} title="Inspect osu! lobby">
+                <RefreshCw className={`size-4 ${busy === "probe" ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
+          </label>
 
-      {/* Ban declarations */}
-      <div className="space-y-1.5">
-        <SectionLabel>Ban declarations</SectionLabel>
-        <p className="text-[10px] text-muted-foreground/50">Injects player chat. Record bans in mappool manually.</p>
-        {!mappool ? (
-          <p className="text-xs text-muted-foreground/50 italic">Mappool loading…</p>
-        ) : availableMaps.length === 0 ? (
-          <p className="text-xs text-muted-foreground/50">No available maps.</p>
-        ) : (
-          <div className="space-y-2">
-            {([playerA, playerB] as const).map((player, idx) => (
-              <div key={player} className="space-y-1">
-                <p className="text-[10px] text-muted-foreground">P{idx + 1} - {player}</p>
-                <div className="flex flex-wrap gap-1">
-                  {availableMaps.map(m => (
-                    <button
-                      key={m.slot}
-                      onClick={() => simulateBanChat(player, m.slot)}
-                      className="rounded border border-border bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-[#a4564e]/60 hover:text-[#a4564e]"
-                    >
-                      {m.slot}
-                    </button>
-                  ))}
-                </div>
+          {probe && (
+            <div className="space-y-3 rounded-md border border-border/70 bg-card/30 p-3">
+              <div>
+                <p className="truncate text-xs font-medium" title={probe.name}>{probe.name}</p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">{probe.games.length} games in API window, {probe.users.length} lobby users</p>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* Next to pick */}
-      <div className="space-y-1.5">
-        <SectionLabel>Next to pick</SectionLabel>
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" className="flex-1 text-xs" disabled={!hasChannel} onClick={() => injectPickNext(playerA)}>
-            {playerA}
-          </Button>
-          <Button size="sm" variant="outline" className="flex-1 text-xs" disabled={!hasChannel} onClick={() => injectPickNext(playerB)}>
-            {playerB}
-          </Button>
+              <label className="block space-y-1">
+                <span className="text-[10px] text-muted-foreground">{playerA}</span>
+                <select className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs" value={playerAId} onChange={(event) => setPlayerAId(event.target.value)}>
+                  <option value="">Select osu! user</option>
+                  {probe.users.map((user) => <option key={user.id} value={user.id}>{user.username} ({user.id})</option>)}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] text-muted-foreground">{playerB}</span>
+                <select className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs" value={playerBId} onChange={(event) => setPlayerBId(event.target.value)}>
+                  <option value="">Select osu! user</option>
+                  {probe.users.map((user) => <option key={user.id} value={user.id}>{user.username} ({user.id})</option>)}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[10px] text-muted-foreground">Game cursor</span>
+                <select className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs" value={mode} onChange={(event) => setMode(event.target.value === "live" ? "live" : "replay")}>
+                  <option value="replay">Replay from first recorded game</option>
+                  <option value="live">Follow games created after binding</option>
+                </select>
+              </label>
+              <Button className="w-full text-xs" size="sm" disabled={!playerAId || !playerBId || playerAId === playerBId || busy !== null} onClick={() => void bindLobby()}>
+                <Link2 className="size-4" />{busy === "bind" ? "Binding..." : "Bind recorded lobby"}
+              </Button>
+            </div>
+          )}
         </div>
-      </div>
-
-      <Separator />
-
-      {/* Game results */}
-      <div className="space-y-1.5">
-        <SectionLabel>Game results</SectionLabel>
-        <p className="text-[10px] text-muted-foreground/50">Pick a map in the mappool first, then simulate its result here.</p>
-        {!mappool ? (
-          <p className="text-xs text-muted-foreground/50 italic">Mappool loading…</p>
-        ) : activePicks.length === 0 ? (
-          <p className="text-xs text-muted-foreground/50">No picked maps awaiting result.</p>
-        ) : (
-          <div className="space-y-2">
-            {activePicks.map(m => (
-              <div key={m.slot} className="rounded-md border border-border/60 bg-card/30 px-2.5 py-2 space-y-1.5">
-                <p className="text-[10px] font-heading font-bold text-muted-foreground">{m.slot}</p>
-                <div className="flex gap-1.5">
-                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m, playerA)}>
-                    {playerA} wins
-                  </Button>
-                  <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => simulateResult(m, playerB)}>
-                    {playerB} wins
-                  </Button>
-                </div>
-              </div>
-            ))}
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-md border border-border/70 bg-card/30 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">Cursor</span><span className="font-mono">{binding.lastGameId || "start"}</span></div>
+            <div className="mt-1 flex items-center justify-between gap-3"><span className="text-muted-foreground">Current pick</span><span className="font-mono">{currentSlot ?? "none"}</span></div>
+            <div className="mt-1 flex items-center justify-between gap-3"><span className="text-muted-foreground">Expected map</span><span className="font-mono">{binding.expected?.beatmapId ?? "set up pick first"}</span></div>
           </div>
-        )}
-      </div>
 
-      <Separator />
+          <Button className="w-full text-xs" size="sm" onClick={() => void checkNextGame()} disabled={!binding.expected || busy !== null}>
+            <RefreshCw className={`size-4 ${busy === "check" ? "animate-spin" : ""}`} />Check next osu! game
+          </Button>
 
-      {/* Unlock post result */}
-      <div className="space-y-1.5">
-        <SectionLabel>Match finish</SectionLabel>
-        <Button
-          size="sm"
-          variant={resultUnlocked ? "secondary" : "outline"}
-          className="w-full text-xs"
-          disabled={resultUnlocked}
-          onClick={() => { setResultUnlocked(true); onUnlockPostResult() }}
-        >
-          {resultUnlocked ? "Post result unlocked ✓" : "Unlock post result"}
-        </Button>
-      </div>
+          {result && !result.pending && result.game && (
+            <div className="space-y-3 rounded-md border border-border/70 bg-card/30 p-3">
+              <div className="flex items-center justify-between gap-3"><p className="font-mono text-xs">game #{result.game.id}</p><span className="font-mono text-[10px] text-muted-foreground">map {result.game.beatmapId}</span></div>
+              <div className="space-y-1.5">
+                {result.checks?.map((check) => (
+                  <div key={check.key} className="flex items-start gap-2 text-xs">
+                    {check.ok ? <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-[#5f7f63]" /> : <XCircle className="mt-0.5 size-3.5 shrink-0 text-destructive" />}
+                    <div className="min-w-0"><p>{check.label}</p>{!check.ok && <p className="break-words font-mono text-[10px] text-muted-foreground">expected {check.expected}; got {check.actual}</p>}</div>
+                  </div>
+                ))}
+              </div>
+              {result.values && (
+                <div className="grid grid-cols-2 gap-2 border-t border-border/60 pt-2 text-xs">
+                  <div><p className="text-[10px] text-muted-foreground">{playerA}</p><p className="font-mono">{result.values.scoreA ?? "missing"}{result.values.accuracyMode ? "%" : ""}</p></div>
+                  <div><p className="text-[10px] text-muted-foreground">{playerB}</p><p className="font-mono">{result.values.scoreB ?? "missing"}{result.values.accuracyMode ? "%" : ""}</p></div>
+                </div>
+              )}
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <Button size="sm" className="text-xs" disabled={!result.canApply || busy !== null || scoreSubmitting} onClick={() => void applyVerifiedResult()}>
+                  <CheckCircle2 className="size-4" />{busy === "apply" ? "Applying..." : "Apply verified result"}
+                </Button>
+                <Button size="icon" variant="outline" disabled={busy !== null} onClick={() => void skipGame()} title="Skip this recorded game"><SkipForward className="size-4" /></Button>
+              </div>
+            </div>
+          )}
+
+          <Separator />
+          <Button size="sm" variant="outline" className="w-full text-xs" disabled={busy !== null} onClick={() => void detachLobby()}><Unlink className="size-4" />Detach recorded lobby</Button>
+        </div>
+      )}
     </div>
   )
 }

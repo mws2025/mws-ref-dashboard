@@ -76,7 +76,75 @@ export interface MatchFlowState {
   homeModB?: HomeMod
   currentSlot?: string
   scoreOverridden?: boolean
+  testBinding?: TestMpBinding
   updatedAt?: string
+}
+
+export interface TestExpectedSetup {
+  slot: string
+  beatmapId: number
+  lobbyMods: string
+  playerAMods: string[]
+  playerBMods: string[]
+  scoringType: string
+}
+
+export interface TestMpBinding {
+  mpId: number
+  mode: "replay" | "live"
+  playerAOsuId: number
+  playerBOsuId: number
+  lastEventId: number
+  lastGameId: number
+  boundAt: string
+  expected?: TestExpectedSetup
+}
+
+export interface TestMpUser {
+  id: number
+  username: string
+}
+
+export interface TestMpProbe {
+  mpId: number
+  name: string
+  users: TestMpUser[]
+  games: Array<{
+    eventId: number
+    id: number
+    beatmapId: number
+    endedAt: string | null
+    scoringType: string
+    mods: string[]
+    scoreCount: number
+  }>
+}
+
+export interface TestMpResult {
+  pending: boolean
+  message?: string
+  canApply?: boolean
+  slot?: string
+  mpId?: number
+  game?: {
+    id: number
+    beatmapId: number
+    endedAt: string | null
+    mods: string[]
+    scoringType: string
+  }
+  checks?: Array<{
+    key: string
+    label: string
+    ok: boolean
+    expected: string
+    actual: string
+  }>
+  values?: {
+    scoreA: number | null
+    scoreB: number | null
+    accuracyMode: boolean
+  }
 }
 
 export interface Match {

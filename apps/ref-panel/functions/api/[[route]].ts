@@ -103,6 +103,28 @@ type MatchFlowPhase =
   | "ready_result"
   | "completed"
 
+type TestMpBindingMode = "replay" | "live"
+
+type TestExpectedSetup = {
+  slot: string
+  beatmapId: number
+  lobbyMods: string
+  playerAMods: string[]
+  playerBMods: string[]
+  scoringType: string
+}
+
+type TestMpBinding = {
+  mpId: number
+  mode: TestMpBindingMode
+  playerAOsuId: number
+  playerBOsuId: number
+  lastEventId: number
+  lastGameId: number
+  boundAt: string
+  expected?: TestExpectedSetup
+}
+
 type MatchFlowState = {
   matchId: string
   phase: MatchFlowPhase
@@ -116,6 +138,7 @@ type MatchFlowState = {
   homeModB?: HomeMod
   currentSlot?: string
   scoreOverridden?: boolean
+  testBinding?: TestMpBinding
   updatedAt?: string
 }
 
@@ -158,6 +181,135 @@ function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promise<Resp
     headers,
   })
 }
+
+type OsuMpUser = { id: number; username: string }
+type OsuMpScore = { userId: number; score: number; accuracy: number; mods: string[] }
+type OsuMpGame = {
+  eventId: number
+  id: number
+  beatmapId: number
+  endedAt: string | null
+  mods: string[]
+  scoringType: string
+  scores: OsuMpScore[]
+}
+type OsuMpMatch = {
+  id: number
+  name: string
+  firstEventId: number
+  latestEventId: number
+  users: OsuMpUser[]
+  games: OsuMpGame[]
+}
+
+let osuClientTokenCache: { token: string; expiresAt: number } | null = null
+
+function normalizeOsuMods(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (typeof entry === "string") return [entry.toUpperCase()]
+    const record = toRecord(entry)
+    return typeof record?.acronym === "string" ? [record.acronym.toUpperCase()] : []
+  })
+}
+
+async function getOsuClientToken(env: Bindings): Promise<string> {
+  if (osuClientTokenCache && osuClientTokenCache.expiresAt > Date.now() + 30_000) {
+    return osuClientTokenCache.token
+  }
+  const tokenRes = await fetchOsu(env, "/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    body: new URLSearchParams({
+      client_id: mustEnv(env, "OSU_CLIENT_ID"),
+      client_secret: mustEnv(env, "OSU_CLIENT_SECRET"),
+      grant_type: "client_credentials",
+      scope: "public",
+    }),
+  })
+  if (!tokenRes.ok) {
+    throw new Error(`osu! token exchange failed: ${tokenRes.status} ${await tokenRes.text()}`)
+  }
+  const payload = toRecord(await tokenRes.json())
+  const token = typeof payload?.access_token === "string" ? payload.access_token : ""
+  if (!token) throw new Error("osu! token response missing access_token")
+  const expiresIn = typeof payload?.expires_in === "number" ? payload.expires_in : 3600
+  osuClientTokenCache = { token, expiresAt: Date.now() + expiresIn * 1000 }
+  return token
+}
+
+function parseOsuMpMatch(value: unknown): OsuMpMatch {
+  const root = toRecord(value)
+  const match = toRecord(root?.match)
+  const id = Number(match?.id)
+  if (!root || !match || !Number.isFinite(id)) throw new Error("osu! match response malformed")
+
+  const users = (Array.isArray(root.users) ? root.users : []).flatMap((entry): OsuMpUser[] => {
+    const user = toRecord(entry)
+    const userId = Number(user?.id)
+    return Number.isFinite(userId) && typeof user?.username === "string"
+      ? [{ id: userId, username: user.username }]
+      : []
+  })
+  const games = (Array.isArray(root.events) ? root.events : []).flatMap((entry): OsuMpGame[] => {
+    const event = toRecord(entry)
+    const game = toRecord(event?.game)
+    if (!game) return []
+    const eventId = Number(event?.id)
+    const gameId = Number(game.id)
+    const beatmapId = Number(game.beatmap_id)
+    if (!Number.isFinite(eventId) || !Number.isFinite(gameId) || !Number.isFinite(beatmapId)) return []
+    const scores = (Array.isArray(game.scores) ? game.scores : []).flatMap((rawScore): OsuMpScore[] => {
+      const score = toRecord(rawScore)
+      const userId = Number(score?.user_id)
+      const value = Number(score?.score)
+      const accuracy = Number(score?.accuracy)
+      return Number.isFinite(userId) && Number.isFinite(value)
+        ? [{
+            userId,
+            score: value,
+            accuracy: Number.isFinite(accuracy) ? accuracy : 0,
+            mods: normalizeOsuMods(score?.mods),
+          }]
+        : []
+    })
+    return [{
+      eventId,
+      id: gameId,
+      beatmapId,
+      endedAt: typeof game.end_time === "string" ? game.end_time : null,
+      mods: normalizeOsuMods(game.mods),
+      scoringType: typeof game.scoring_type === "string" ? game.scoring_type.toLowerCase() : "",
+      scores,
+    }]
+  }).sort((a, b) => a.eventId - b.eventId)
+  return {
+    id,
+    name: typeof match.name === "string" ? match.name : `mp#${id}`,
+    firstEventId: Number(root.first_event_id) || 0,
+    latestEventId: Number(root.latest_event_id) || 0,
+    users,
+    games,
+  }
+}
+
+async function fetchOsuMpMatch(env: Bindings, mpId: number, afterEventId?: number): Promise<OsuMpMatch> {
+  const token = await getOsuClientToken(env)
+  const query = afterEventId === undefined ? "" : `?after=${afterEventId}&limit=101`
+  const response = await fetchOsu(env, `/api/v2/matches/${mpId}${query}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  })
+  if (!response.ok) throw new Error(`osu! match lookup failed: ${response.status} ${await response.text()}`)
+  return parseOsuMpMatch(await response.json())
+}
+
+function parseMpId(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null
+  const raw = String(value).trim()
+  const match = raw.match(/(?:matches|mp)\/(\d+)/i)
+  const parsed = Number(match?.[1] ?? (/^\d+$/.test(raw) ? raw : NaN))
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 const GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 const SESSION_COOKIE_NAME = "mws_ref_session"
@@ -177,6 +329,7 @@ const MATCH_STATE_HEADERS = [
   "home_mod_b",
   "current_slot",
   "score_overridden",
+  "test_binding",
   "updated_at",
 ] as const
 const INVENTORY_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
@@ -1035,6 +1188,10 @@ function scoringModeToInt(mode: string): number {
   }
 }
 
+function scoringTypeForInt(mode: number): string {
+  return ["score", "accuracy", "combo", "scorev2"][mode] ?? "score"
+}
+
 function formatToLobbySize(format: string): number {
   const m = format.trim().match(/(\d+)v(\d+)/i)
   if (m) return parseInt(m[1], 10) + parseInt(m[2], 10)
@@ -1214,6 +1371,43 @@ function normalizeHomeMod(value: unknown): HomeMod | undefined {
   return ["NM", "PS", "HR", "DT", "FM"].includes(normalized) ? normalized as HomeMod : undefined
 }
 
+function parseTestMpBinding(raw: string): TestMpBinding | undefined {
+  if (!raw.trim()) return undefined
+  try {
+    const value = toRecord(JSON.parse(raw))
+    if (!value) return undefined
+    const mpId = Number(value.mpId)
+    const playerAOsuId = Number(value.playerAOsuId)
+    const playerBOsuId = Number(value.playerBOsuId)
+    const lastEventId = Number(value.lastEventId ?? 0)
+    const lastGameId = Number(value.lastGameId ?? 0)
+    if (![mpId, playerAOsuId, playerBOsuId, lastEventId, lastGameId].every(Number.isFinite)) return undefined
+    const expectedRaw = toRecord(value.expected)
+    const expected = expectedRaw && Number.isFinite(Number(expectedRaw.beatmapId))
+      ? {
+          slot: String(expectedRaw.slot ?? ""),
+          beatmapId: Number(expectedRaw.beatmapId),
+          lobbyMods: String(expectedRaw.lobbyMods ?? ""),
+          playerAMods: normalizeOsuMods(expectedRaw.playerAMods),
+          playerBMods: normalizeOsuMods(expectedRaw.playerBMods),
+          scoringType: String(expectedRaw.scoringType ?? "score"),
+        }
+      : undefined
+    return {
+      mpId,
+      mode: value.mode === "live" ? "live" : "replay",
+      playerAOsuId,
+      playerBOsuId,
+      lastEventId,
+      lastGameId,
+      boundAt: String(value.boundAt ?? ""),
+      expected,
+    }
+  } catch {
+    return undefined
+  }
+}
+
 function opponentOf(player: string, playerA: string, playerB: string): string {
   return player.trim().toLowerCase() === playerA.trim().toLowerCase() ? playerB : playerA
 }
@@ -1258,6 +1452,7 @@ function matchFlowFromRecord(record: SheetRecord, matchId: string, hasLobby: boo
     homeModB: normalizeHomeMod(firstValue(record, ["home_mod_b", "homemodb"])),
     currentSlot: firstValue(record, ["current_slot", "currentslot"]) || undefined,
     scoreOverridden: firstValue(record, ["score_overridden", "scoreoverridden"]).toLowerCase() === "true",
+    testBinding: parseTestMpBinding(firstValue(record, ["test_binding", "testbinding"])),
     updatedAt: firstValue(record, ["updated_at", "updatedat"]) || undefined,
   }
 }
@@ -1291,6 +1486,7 @@ async function writeMatchFlowState(env: Bindings, state: MatchFlowState): Promis
       case "home_mod_b": return nextState.homeModB ?? ""
       case "current_slot": return nextState.currentSlot ?? ""
       case "score_overridden": return nextState.scoreOverridden ? "true" : "false"
+      case "test_binding": return nextState.testBinding ? JSON.stringify(nextState.testBinding) : ""
       case "updated_at": return nextState.updatedAt ?? ""
       default: return ""
     }
@@ -1650,6 +1846,8 @@ type RecipePickSetup = {
   mods: string
   commandsBefore: string[]
   notices: string[]
+  playerAMods: string[]
+  playerBMods: string[]
   beatmapId?: string
   mapTitle?: string
 }
@@ -1660,6 +1858,8 @@ async function activateRecipesForPick(
   player: string,
   slot: string,
   pool: string,
+  playerA: string,
+  playerB: string,
 ): Promise<RecipePickSetup> {
   const [events, items, configMap] = await Promise.all([
     getRecipeEvents(env, matchId),
@@ -1691,6 +1891,10 @@ async function activateRecipesForPick(
   const notices: string[] = []
   let beatmapId: string | undefined
   let mapTitle: string | undefined
+  const extraPlayerMods = new Map<string, Set<string>>([
+    [playerA.toLowerCase(), new Set<string>()],
+    [playerB.toLowerCase(), new Set<string>()],
+  ])
   const teamMode = teamModeToInt(configMap.get("team mode") ?? "")
   const lobbySize = formatToLobbySize(configMap.get("format") ?? "1v1")
 
@@ -1702,10 +1906,16 @@ async function activateRecipesForPick(
       mods = formatLobbyMods(["NC"], enforceNF)
     } else if (effectType === "mod_add_self") {
       mods = formatLobbyMods(["Freemod"], enforceNF)
-      notices.push(`${event.player} must use ${String(payload.mod ?? "")}; the opponent must not add a recipe mod.`)
+      const selectedMod = String(payload.mod ?? "").toUpperCase()
+      if (selectedMod) extraPlayerMods.get(event.player.toLowerCase())?.add(selectedMod)
+      notices.push(`${event.player} must use ${selectedMod}; the opponent must not add a recipe mod.`)
     } else if (effectType === "mod_add_both") {
       mods = formatLobbyMods(["Freemod"], enforceNF)
-      notices.push(`Both players must use their selected Custard mods: ${String(payload.modA ?? payload.mod ?? "")} / ${String(payload.modB ?? payload.mod ?? "")}.`)
+      const modA = String(payload.modA ?? payload.mod ?? "").toUpperCase()
+      const modB = String(payload.modB ?? payload.mod ?? "").toUpperCase()
+      if (modA) extraPlayerMods.get(playerA.toLowerCase())?.add(modA)
+      if (modB) extraPlayerMods.get(playerB.toLowerCase())?.add(modB)
+      notices.push(`Both players must use their selected Custard mods: ${modA} / ${modB}.`)
     } else if (effectType === "mod_force_both") {
       const forcedMod = String(payload.mod ?? "").toUpperCase()
       if (forcedMod) {
@@ -1725,7 +1935,23 @@ async function activateRecipesForPick(
     }
   }
 
-  return { eventIds: active.map((event) => event.id), mods, commandsBefore, notices, beatmapId, mapTitle }
+  const globalPlayerMods = mods
+    .split(/\s+/)
+    .map((mod) => mod.toUpperCase())
+    .filter((mod) => mod && mod !== "NONE" && mod !== "FREEMOD")
+  const requiredMods = (playerName: string): string[] => [
+    ...new Set([...globalPlayerMods, ...(extraPlayerMods.get(playerName.toLowerCase()) ?? [])]),
+  ]
+  return {
+    eventIds: active.map((event) => event.id),
+    mods,
+    commandsBefore,
+    notices,
+    playerAMods: requiredMods(playerA),
+    playerBMods: requiredMods(playerB),
+    beatmapId,
+    mapTitle,
+  }
 }
 
 function getMapPoolForSlot(poolRecords: SheetRecord[], slot: string): string {
@@ -2152,6 +2378,195 @@ app.get("/api/match/:matchId/state", async (c) => {
   }
 })
 
+app.post("/api/match/:matchId/test/mp-probe", async (c) => {
+  let body: Record<string, unknown>
+  try { body = await c.req.json() as Record<string, unknown> } catch { return c.json({ error: "Invalid JSON" }, 400) }
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (!isTestMode(configMap)) return c.json({ error: "Integration testing requires test mode" }, 409)
+    const mpId = parseMpId(body.mp)
+    if (!mpId) return c.json({ error: "A valid osu! MP link or ID is required" }, 400)
+    const mp = await fetchOsuMpMatch(c.env, mpId)
+    return c.json({
+      mpId: mp.id,
+      name: mp.name,
+      users: mp.users,
+      games: mp.games.map((game) => ({
+        eventId: game.eventId,
+        id: game.id,
+        beatmapId: game.beatmapId,
+        endedAt: game.endedAt,
+        scoringType: game.scoringType,
+        mods: game.mods,
+        scoreCount: game.scores.length,
+      })),
+    })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "osu! match lookup failed" }, 502)
+  }
+})
+
+app.post("/api/match/:matchId/test/mp-binding", async (c) => {
+  const matchId = c.req.param("matchId")
+  let body: Record<string, unknown>
+  try { body = await c.req.json() as Record<string, unknown> } catch { return c.json({ error: "Invalid JSON" }, 400) }
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (!isTestMode(configMap)) return c.json({ error: "Integration testing requires test mode" }, 409)
+    const mpId = parseMpId(body.mpId)
+    const playerAOsuId = Number(body.playerAOsuId)
+    const playerBOsuId = Number(body.playerBOsuId)
+    const mode: TestMpBindingMode = body.mode === "live" ? "live" : "replay"
+    if (!mpId || !Number.isSafeInteger(playerAOsuId) || playerAOsuId <= 0 || !Number.isSafeInteger(playerBOsuId) || playerBOsuId <= 0) {
+      return c.json({ error: "mpId and both osu! user mappings are required" }, 400)
+    }
+    if (playerAOsuId === playerBOsuId) return c.json({ error: "Map each side to a different osu! user" }, 400)
+    const [match, mp] = await Promise.all([getMatchById(c.env, matchId), fetchOsuMpMatch(c.env, mpId)])
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const roster = new Set(mp.users.map((user) => user.id))
+    if (!roster.has(playerAOsuId) || !roster.has(playerBOsuId)) {
+      return c.json({ error: "Both mapped users must appear in the osu! MP roster" }, 400)
+    }
+    const current = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const binding: TestMpBinding = {
+      mpId,
+      mode,
+      playerAOsuId,
+      playerBOsuId,
+      lastEventId: mode === "live" ? mp.latestEventId : Math.max(0, mp.firstEventId - 1),
+      lastGameId: mode === "live" ? mp.games.at(-1)?.id ?? 0 : 0,
+      boundAt: new Date().toISOString(),
+    }
+    const state = await writeMatchFlowState(c.env, {
+      ...current,
+      phase: current.phase === "lobby" ? "roll" : current.phase,
+      testBinding: binding,
+    })
+    await updateMatchField(c.env, matchId, "lobby_url", `https://osu.ppy.sh/mp/${mpId}`).catch(() => {})
+    return c.json({ ok: true, state, binding, lobbyUrl: `https://osu.ppy.sh/mp/${mpId}` })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to bind osu! match" }, 500)
+  }
+})
+
+app.delete("/api/match/:matchId/test/mp-binding", async (c) => {
+  const matchId = c.req.param("matchId")
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (!isTestMode(configMap)) return c.json({ error: "Integration testing requires test mode" }, 409)
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const current = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const state = await writeMatchFlowState(c.env, { ...current, testBinding: undefined })
+    return c.json({ ok: true, state })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to clear osu! match binding" }, 500)
+  }
+})
+
+app.get("/api/match/:matchId/test/mp-result", async (c) => {
+  const matchId = c.req.param("matchId")
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (!isTestMode(configMap)) return c.json({ error: "Integration testing requires test mode" }, 409)
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const state = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const binding = state.testBinding
+    if (!binding) return c.json({ error: "Bind an osu! MP lobby first" }, 409)
+    if (!binding.expected) {
+      return c.json({ error: "Set up the current picked map before checking osu!" }, 409)
+    }
+    const mp = await fetchOsuMpMatch(c.env, binding.mpId, binding.lastEventId)
+    const game = mp.games[0]
+    if (!game) return c.json({ pending: true, message: "No new osu! game is available yet" })
+
+    const scoreA = game.scores.find((score) => score.userId === binding.playerAOsuId)
+    const scoreB = game.scores.find((score) => score.userId === binding.playerBOsuId)
+    const expectedLobbyModTokens = binding.expected.lobbyMods
+      .split(/\s+/)
+      .map((mod) => mod.toUpperCase())
+      .filter((mod) => mod && mod !== "NONE")
+    const isFreemod = expectedLobbyModTokens.includes("FREEMOD")
+    const expectedLobbyMods = expectedLobbyModTokens.filter((mod) => mod !== "FREEMOD")
+    const actualLobbyMods = new Set(game.mods.map((mod) => mod.toUpperCase()))
+    const actualPlayerAMods = new Set(scoreA?.mods.map((mod) => mod.toUpperCase()) ?? [])
+    const actualPlayerBMods = new Set(scoreB?.mods.map((mod) => mod.toUpperCase()) ?? [])
+    // Legacy MP history reports an empty game-level mod array for Freemod games;
+    // the required mods are therefore verified on each mapped player's score.
+    const lobbyModsMatch = isFreemod || expectedLobbyMods.every((mod) => actualLobbyMods.has(mod))
+    const playerAModsMatch = binding.expected.playerAMods.every((mod) => actualPlayerAMods.has(mod))
+    const playerBModsMatch = binding.expected.playerBMods.every((mod) => actualPlayerBMods.has(mod))
+    const checks = [
+      { key: "flow", label: "Portal map is awaiting score", ok: state.phase === "play" && samePlayer(state.currentSlot, binding.expected.slot), expected: `play ${binding.expected.slot}`, actual: `${state.phase} ${state.currentSlot ?? "none"}` },
+      { key: "finished", label: "Game finished", ok: Boolean(game.endedAt), expected: "finished", actual: game.endedAt ?? "in progress" },
+      { key: "beatmap", label: "Beatmap ID", ok: game.beatmapId === binding.expected.beatmapId, expected: String(binding.expected.beatmapId), actual: String(game.beatmapId) },
+      { key: "player_a", label: `${match.playerA} score`, ok: Boolean(scoreA), expected: String(binding.playerAOsuId), actual: scoreA ? String(scoreA.userId) : "missing" },
+      { key: "player_b", label: `${match.playerB} score`, ok: Boolean(scoreB), expected: String(binding.playerBOsuId), actual: scoreB ? String(scoreB.userId) : "missing" },
+      { key: "lobby_mods", label: "Lobby mods", ok: lobbyModsMatch, expected: expectedLobbyModTokens.join(" ") || "None", actual: isFreemod ? "verified per player" : [...actualLobbyMods].join(" ") || "None" },
+      { key: "player_a_mods", label: `${match.playerA} mods`, ok: playerAModsMatch, expected: binding.expected.playerAMods.join(" ") || "None", actual: [...actualPlayerAMods].join(" ") || "None" },
+      { key: "player_b_mods", label: `${match.playerB} mods`, ok: playerBModsMatch, expected: binding.expected.playerBMods.join(" ") || "None", actual: [...actualPlayerBMods].join(" ") || "None" },
+      { key: "scoring", label: "Scoring type", ok: game.scoringType === binding.expected.scoringType, expected: binding.expected.scoringType, actual: game.scoringType || "unknown" },
+    ]
+    const accuracyMode = binding.expected.scoringType === "accuracy"
+    const scoreValue = (score: OsuMpScore | undefined): number | null => {
+      if (!score) return null
+      if (!accuracyMode) return score.score
+      return Number((score.accuracy <= 1 ? score.accuracy * 100 : score.accuracy).toFixed(4))
+    }
+    return c.json({
+      pending: false,
+      canApply: checks.every((check) => check.ok),
+      slot: binding.expected.slot,
+      mpId: binding.mpId,
+      game: {
+        id: game.id,
+        beatmapId: game.beatmapId,
+        endedAt: game.endedAt,
+        mods: game.mods,
+        scoringType: game.scoringType,
+      },
+      checks,
+      values: { scoreA: scoreValue(scoreA), scoreB: scoreValue(scoreB), accuracyMode },
+    })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to verify osu! game" }, 502)
+  }
+})
+
+app.post("/api/match/:matchId/test/mp-result/consume", async (c) => {
+  const matchId = c.req.param("matchId")
+  let body: Record<string, unknown>
+  try { body = await c.req.json() as Record<string, unknown> } catch { return c.json({ error: "Invalid JSON" }, 400) }
+  try {
+    const configMap = await getConfigMap(c.env)
+    if (!isTestMode(configMap)) return c.json({ error: "Integration testing requires test mode" }, 409)
+    const gameId = Number(body.gameId)
+    const keepExpected = body.keepExpected === true
+    if (!Number.isSafeInteger(gameId)) return c.json({ error: "gameId required" }, 400)
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const current = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const binding = current.testBinding
+    if (!binding) return c.json({ error: "No osu! MP lobby is bound" }, 409)
+    const mp = await fetchOsuMpMatch(c.env, binding.mpId, binding.lastEventId)
+    const nextGame = mp.games[0]
+    if (!nextGame || nextGame.id !== gameId) return c.json({ error: "Only the next unconsumed osu! game can be consumed" }, 409)
+    const state = await writeMatchFlowState(c.env, {
+      ...current,
+      testBinding: {
+        ...binding,
+        lastEventId: nextGame.eventId,
+        lastGameId: gameId,
+        expected: keepExpected ? binding.expected : undefined,
+      },
+    })
+    return c.json({ ok: true, state })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to consume osu! game" }, 500)
+  }
+})
+
 app.post("/api/match/:matchId/state", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
@@ -2385,6 +2800,7 @@ app.post("/api/match/:matchId/reset", async (c) => {
       home_mod_b: "",
       current_slot: "",
       score_overridden: "false",
+      test_binding: "",
       updated_at: now,
     })
 
@@ -4455,10 +4871,11 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
   try {
     const match = await getMatchById(c.env, matchId)
     if (!match) return c.json({ error: "Match not found" }, 404)
-    const [flowState, matchMapValues, poolValues] = await Promise.all([
+    const [flowState, matchMapValues, poolValues, configMap] = await Promise.all([
       getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl)),
       getSheetValuesSafe(c.env, "match_maps!A1:Z"),
       getSheetValuesSafe(c.env, "mappool!A1:Z"),
+      getConfigMap(c.env),
     ])
     if (flowState.phase !== "craft" || !samePlayer(flowState.currentSlot, slot)) {
       return c.json({ error: `${slot} is not awaiting recipe setup` }, 409)
@@ -4471,13 +4888,39 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
       return c.json({ error: `${slot} is not currently picked` }, 409)
     }
     const picker = firstValue(mapRecord ?? {}, ["picked_by"]) || flowState.turnPlayer || ""
-    const pool = getMapPoolForSlot(sheetRowsToRecords(poolValues), slot)
-    const recipeSetup = await activateRecipesForPick(c.env, matchId, picker, slot, pool)
+    const poolRecords = sheetRowsToRecords(poolValues)
+    const poolRecord = poolRecords.find((record) =>
+      samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
+      (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
+    )
+    const pool = firstValue(poolRecord ?? {}, ["mod_pool", "pool"]).toUpperCase() || getMapPoolForSlot(poolRecords, slot)
+    const recipeSetup = await activateRecipesForPick(c.env, matchId, picker, slot, pool, match.playerA, match.playerB)
+    const expectedBeatmapId = Number(recipeSetup.beatmapId ?? firstValue(poolRecord ?? {}, ["beatmap_id"]))
+    const scoringCommand = recipeSetup.commandsBefore
+      .map((command) => command.match(/^!mp set\s+\d+\s+(\d+)/i)?.[1])
+      .find((value) => value !== undefined)
+    const expectedScoringType = scoringTypeForInt(
+      scoringCommand === undefined ? scoringModeToInt(configMap.get("scoring") ?? "") : Number(scoringCommand),
+    )
+    const testBinding = isTestMode(configMap) && flowState.testBinding && Number.isSafeInteger(expectedBeatmapId)
+      ? {
+          ...flowState.testBinding,
+          expected: {
+            slot,
+            beatmapId: expectedBeatmapId,
+            lobbyMods: recipeSetup.mods,
+            playerAMods: recipeSetup.playerAMods,
+            playerBMods: recipeSetup.playerBMods,
+            scoringType: expectedScoringType,
+          },
+        }
+      : flowState.testBinding
     const state = await writeMatchFlowState(c.env, {
       ...flowState,
       phase: "play",
       turnPlayer: picker,
       currentSlot: slot,
+      testBinding,
     })
     return c.json({ ok: true, slot, state, recipeSetup })
   } catch (error) {

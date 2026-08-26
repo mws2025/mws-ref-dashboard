@@ -20,7 +20,7 @@ Google Sheets is the source of truth for the event. No separate database is requ
 
 - No full database stack for MVP.
 - No generic tournament builder.
-- No fully automated osu! API adjudication in first pass unless needed.
+- No unattended osu! API adjudication; a referee must review and apply every verified game.
 - No complex auth provider unless refs need remote access control.
 
 ## Stack (locked)
@@ -105,7 +105,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - `matches`: match_id, round, mappool, best_of, date, time, player_a, player_b, referee, streamer, status, lobby_url, winner, score_a, score_b.
 - `mappool`: map_id, beatmap_id, title, mod_pool, round.
 - `match_maps`: match_id, slot, map_id, picked_by, banned_by, score_a, score_b, winner, status.
-- `match_state`: match_id, phase, roll_a, roll_b, roll_winner, first_picker, first_banner, turn_player, home_mod_a, home_mod_b, current_slot, updated_at.
+- `match_state`: match_id, phase, roll_a, roll_b, roll_winner, first_picker, first_banner, turn_player, home_mod_a, home_mod_b, current_slot, score_overridden, test_binding, updated_at.
 - `inventory`: match_id, player, egg, sugar, butter, flour, milk.
 - `items`: item_id, name, cost, craft_condition, effect_type, effect_payload, enabled.
 - `item_events`: event_id, match_id, player_id, item_id, action, target, payload, created_by, created_at, reverted_at, status, activated_at, resolved_at, resolution.
@@ -204,15 +204,12 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Test-mode lobby creation/joining still writes the simulated lobby URL to Sheets; match state and recipes use normal writes.
 - [x] Client reads `testMode` from config, threads through App → Dashboard + MatchPanel.
 - [x] Amber banner at very top of all relevant pages.
-- [x] **Sim tab** in match panel right panel (amber label, only visible in test mode):
-  - Simulate player joins (BanchoBot injected with 800ms stagger)
-  - Simulate rolls (random numbers, shows results + who picks first)
-  - Ban declarations (slot buttons per player → injects player chat message)
-  - Next to pick (P1/P2 buttons → injects ref message)
-  - Game results (per picked map → injects score messages, updates mappool + scores)
-  - Unlock post result (bypasses `isFinished` gate)
-- [x] `simulateGameResult()` in MatchPanel updates `liveMappool` and increments score locally.
-- [x] `testResultUnlocked` prop on PlayerColumn bypasses match-finished gate for post result.
+- [x] **Integration tab** binds an existing osu! MP link and maps lobby users to portal red/blue sides.
+- [x] Recorded lobbies can replay from their first event; live lobbies start after the latest event at bind time.
+- [x] The persisted event cursor prevents refreshes or another ref browser from applying one osu! game twice.
+- [x] Each candidate game validates completion, beatmap ID, both mapped users, lobby mods, per-side recipe mods, and scoring type.
+- [x] Verified score or accuracy values pass through the normal recipe-aware settlement endpoint; failed checks cannot be applied.
+- [x] Warmups and unrelated recorded games can be explicitly skipped without changing match score.
 
 ---
 
@@ -231,9 +228,10 @@ Flow:
 3. `POST /api/match/:id/score` settles `match_maps`, canonical match stars, recipes, and inventories.
 4. Client updates the mappool, stars, recipe state, and ingredients, then announces all of them in IRC.
 
-Endpoints needed:
-- `GET /api/match/:id/mp-result` — osu! API fetch, score resolution, return `{ scoreA, scoreB, winner, mapId }`.
-- `POST /api/match/:id/score` — implemented and authoritative.
+Endpoints:
+- `GET /api/match/:id/test/mp-result` — fetches the next osu! event window and validates the next game.
+- `POST /api/match/:id/score` — applies a verified result through the authoritative recipe-aware settlement path.
+- `POST /api/match/:id/test/mp-result/consume` — advances the persisted osu! event cursor after apply or explicit skip.
 
 Manual fallback is the same score-entry form; refs can overwrite either detected value before submission.
 
@@ -247,7 +245,7 @@ Manual fallback is the same score-entry form; refs can overwrite either detected
 
 ### 🟢 osu! API Integration
 
-- [ ] `GET /api/match/:id/mp-result` — see Auto Score Detection above.
+- [x] Test-mode MP probe, binding, paginated event cursor, game validation, and verified result application.
 - [ ] Beatmap metadata lookup for mappool (cover art, star rating, BPM, length) — cosmetic, not blocking.
 - [ ] Player avatar/rank lookup — cosmetic.
 
@@ -269,9 +267,9 @@ Manual fallback is the same score-entry form; refs can overwrite either detected
 
 | # | Item | Reason |
 |---|------|--------|
-| 1 | **osu! API result polling** | Optional verification path beyond the implemented BanchoBot score auto-fill. |
+| 1 | **Concurrent write guard** | Prevent stale writes when multiple referees operate the same match. |
 | 2 | **IRC timer completion** | Add abort handling and synchronize timers started outside the portal. |
-| 3 | **Concurrent write guard** | Prevent stale writes when multiple referees operate the same match. |
+| 3 | **Recorded MP dry run** | Exercise recipes, replay games, skips, and result settlement with real referees. |
 | 4 | **Production hardening** | Remove or further gate diagnostics before the tournament. |
 | 5 | **Public feed** | Replace the public-state placeholder with sanitized schedule and result data. |
 
@@ -318,8 +316,13 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | POST | `/api/match/:id/join-lobby` | Done |
 | POST | `/api/match/:id/close-lobby` | Done |
 | POST | `/api/match/:id/remind` | Done |
+| POST | `/api/match/:id/test/mp-probe` | Done, test mode |
+| POST | `/api/match/:id/test/mp-binding` | Done, test mode |
+| DELETE | `/api/match/:id/test/mp-binding` | Done, test mode |
+| GET | `/api/match/:id/test/mp-result` | Done, test mode |
+| POST | `/api/match/:id/test/mp-result/consume` | Done, test mode |
 
-Planned but not registered: `GET /api/match/:id/mp-result` and `POST /api/match/:id/lock`.
+Planned but not registered: `POST /api/match/:id/lock`.
 
 ---
 
@@ -351,12 +354,13 @@ Planned but not registered: `GET /api/match/:id/mp-result` and `POST /api/match/
 | `src/components/match/MapActionModal.tsx` | Pick/ban/protect confirmation |
 | `src/components/match/IrcChat.tsx` | SSE chat, quick commands, simulatedMessages merge, timer bar |
 | `src/components/match/RecipePanel.tsx` | Recipe catalog, activation inputs, lifecycle status, and server-side revert |
-| `src/components/match/TestSimPanel.tsx` | Sim tab — full match flow simulation (test mode only) |
+| `src/components/match/TestSimPanel.tsx` | Integration tab — real osu! MP history verification (test mode only) |
 | `functions/api/[[route]].ts` | Hono entrypoint — all API routes, test mode gates |
 
-### Test Mode Stripping
+### Test Mode Gate
 
-When deploying after testing: delete all blocks between `// #TEST-MODE-START` and `// #TEST-MODE-END` (inclusive) in `functions/api/[[route]].ts` and `src/components/match/IrcChat.tsx`. Also remove the Sim tab from MatchPanel and the TestSimPanel component.
+Keep the integration implementation deployed and set `test mode = FALSE` in the connected config Sheet. The server
+rejects all `/test/*` integration routes unless that flag is true, and the client hides the Integration tab.
 
 ---
 

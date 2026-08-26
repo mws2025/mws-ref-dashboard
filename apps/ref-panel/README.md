@@ -168,7 +168,7 @@ match_id, slot, map_id, picked_by, banned_by, status, score_a, score_b, winner
 
 match_state:
 match_id, phase, roll_a, roll_b, roll_winner, first_picker, first_banner,
-home_mod_a, home_mod_b, turn_player, current_slot, score_overridden, updated_at
+home_mod_a, home_mod_b, turn_player, current_slot, score_overridden, test_binding, updated_at
 
 inventory:
 match_id, player, egg, sugar, butter, flour, milk
@@ -260,6 +260,42 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `POST` | `/api/match/:matchId/reset` | Resets the full match state while preserving the connected lobby. |
 | `POST` | `/api/match/:matchId/post-result` | Completes the match and posts the result webhook. |
 | `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1`. |
+
+### Test-Mode osu! Integration Routes
+
+These authenticated routes return `409` unless the connected Sheet has `test mode = TRUE`.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/match/:matchId/test/mp-probe` | Fetches a real osu! MP lobby and returns its name, roster, and current game window. |
+| `POST` | `/api/match/:matchId/test/mp-binding` | Maps two lobby users to portal sides and persists a replay/live event cursor. |
+| `DELETE` | `/api/match/:matchId/test/mp-binding` | Removes the persisted MP binding. |
+| `GET` | `/api/match/:matchId/test/mp-result` | Reads the next event window and validates the next recorded game against the current setup. |
+| `POST` | `/api/match/:matchId/test/mp-result/consume` | Advances the cursor after applying or explicitly skipping the candidate game. |
+
+Probe with either a full link or numeric ID:
+
+```json
+{ "mp": "https://osu.ppy.sh/mp/123456" }
+```
+
+Bind the inspected lobby for recorded replay or future live games:
+
+```json
+{
+  "mpId": 123456,
+  "mode": "replay",
+  "playerAOsuId": 111,
+  "playerBOsuId": 222
+}
+```
+
+`replay` starts at the match's documented `first_event_id`; `live` starts after `latest_event_id` at bind time. Map
+setup persists the expected slot, beatmap ID, lobby mods, per-side player mods, and scoring type in `match_state.test_binding`. The result route
+returns `canApply: true` only when the game is finished, the beatmap and scoring type match, both mapped users have
+scores, and all expected lobby/player mods are present. Accuracy games return values in the portal's 0-100 format.
+The Integration tab applies those values through the normal `/score` endpoint, then consumes the osu! event. For a
+recipe/tie replay it retains the expected setup and advances to the next recorded game.
 
 ### Recipe Routes
 
@@ -387,8 +423,8 @@ Other mutation bodies:
 | `POST /api/match/:matchId/post-result` | `{ "playerA": "...", "playerB": "...", "scoreA": 5, "scoreB": 3, "winner": "..." }` |
 | `POST /api/match/:matchId/forfeit` | `{ "winner": "...", "playerA": "...", "playerB": "..." }` |
 
-Test mode simulates IRC and lobby operations where marked in the implementation. Sheet-backed match, inventory, score,
-recipe, and result writes remain authoritative.
+Test mode suppresses live IRC and lobby transport where marked in the implementation. Its Integration tab reads actual
+osu! MP history, while Sheet-backed match, inventory, score, recipe, cursor, and result writes remain authoritative.
 
 ## Frontend State
 
@@ -406,7 +442,7 @@ Match panel:
 - Uses the left player column for score, home mod selection, inventory, lobby actions, and result posting.
 - Uses the Recipes tab for activation inputs, lifecycle status, and server-side revert/refund.
 - Manual pick/ban order defaults off; turning it on allows free map actions.
-- Test mode avoids live IRC transport while retaining authoritative Sheet-backed match and recipe state.
+- Test mode avoids live IRC transport while retaining authoritative Sheet-backed state and verifies score input against a bound osu! MP history.
 
 ## Repo Layout
 
