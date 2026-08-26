@@ -1017,6 +1017,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                   playerAOsuId={match.playerAOsuId}
                   playerBOsuId={match.playerBOsuId}
                   binding={flowState?.testBinding}
+                  phase={flowState?.phase}
                   currentSlot={flowState?.currentSlot}
                   scoreSubmitting={scoreSubmitting}
                   onBindingChange={(testBinding) => setFlowState((current) => current ? {

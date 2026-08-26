@@ -18,6 +18,7 @@ interface Props {
   playerAOsuId?: string
   playerBOsuId?: string
   binding?: TestMpBinding
+  phase?: MatchFlowState["phase"]
   currentSlot?: string
   scoreSubmitting: boolean
   onBindingChange: (binding: TestMpBinding | undefined) => void
@@ -31,6 +32,23 @@ function apiError(value: unknown, fallback: string): string {
     : fallback
 }
 
+function nextIntegrationAction(
+  binding: TestMpBinding | undefined,
+  phase: MatchFlowState["phase"] | undefined,
+  currentSlot: string | undefined,
+): string {
+  if (binding?.expected) return `Ready: map ${binding.expected.beatmapId}`
+  if (phase === "roll") return "Save both rolls in Match Control"
+  if (phase === "order") return "Choose the pick/ban order in Match Control"
+  if (phase === "home_mod") return "Choose both home mods"
+  if (phase === "ban") return "Complete the map bans"
+  if (phase === "craft" && currentSlot) return `Set up picked map ${currentSlot} in Match Control`
+  if (phase === "craft") return "Pick the next map"
+  if (phase === "play") return `Set up ${currentSlot ?? "the picked map"} again to record verification data`
+  if (phase === "ready_result" || phase === "completed") return "No map is awaiting a result"
+  return "Complete lobby setup in Match Control"
+}
+
 export function TestSimPanel({
   matchId,
   playerA,
@@ -38,6 +56,7 @@ export function TestSimPanel({
   playerAOsuId,
   playerBOsuId,
   binding,
+  phase,
   currentSlot,
   scoreSubmitting,
   onBindingChange,
@@ -51,6 +70,7 @@ export function TestSimPanel({
   const [playerBId, setPlayerBId] = useState("")
   const [result, setResult] = useState<TestMpResult | null>(null)
   const [busy, setBusy] = useState<"probe" | "bind" | "check" | "apply" | "skip" | "detach" | null>(null)
+  const nextAction = nextIntegrationAction(binding, phase, currentSlot)
 
   async function inspectLobby() {
     setBusy("probe")
@@ -253,7 +273,7 @@ export function TestSimPanel({
           <div className="rounded-md border border-border/70 bg-card/30 px-3 py-2 text-xs">
             <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">Cursor</span><span className="font-mono">{binding.lastGameId || "start"}</span></div>
             <div className="mt-1 flex items-center justify-between gap-3"><span className="text-muted-foreground">Current pick</span><span className="font-mono">{currentSlot ?? "none"}</span></div>
-            <div className="mt-1 flex items-center justify-between gap-3"><span className="text-muted-foreground">Expected map</span><span className="font-mono">{binding.expected?.beatmapId ?? "set up pick first"}</span></div>
+            <div className="mt-1 flex items-start justify-between gap-3"><span className="shrink-0 text-muted-foreground">Next action</span><span className="text-right text-[11px]">{nextAction}</span></div>
           </div>
 
           <Button className="w-full text-xs" size="sm" onClick={() => void checkNextGame()} disabled={!binding.expected || busy !== null}>
