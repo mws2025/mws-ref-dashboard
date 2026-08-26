@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { INGREDIENTS } from "@/data/constants"
-import { RECIPES } from "@/data/recipes"
+import { RECIPES, RECIPES_ALPHABETICAL } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import type {
   IngKey,
@@ -24,14 +24,8 @@ import type {
 
 const MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
 
-function isRecipeTimingOpen(recipe: Recipe, phase: MatchFlowPhase | undefined, hasPickedMap: boolean): boolean {
-  if (!phase) return false
-  const timing = recipe.timing.toLowerCase().replace(/[\s-]+/g, "_")
-  return timing === "any" ||
-    (timing === "ban_phase" && phase === "ban") ||
-    (timing === "pick_phase" && phase === "craft" && hasPickedMap) ||
-    (timing === "before_map" && phase === "craft" && hasPickedMap) ||
-    (timing === "after_score" && phase === "play")
+function isRecipeTimingOpen(phase: MatchFlowPhase | undefined, hasPickedMap: boolean, craftingDisabled: boolean): boolean {
+  return phase === "craft" && !hasPickedMap && !craftingDisabled
 }
 
 function CostDisplay({ cost }: { cost: Partial<Inventory> }) {
@@ -83,68 +77,53 @@ function RecipeList({
   label,
   phase,
   hasPickedMap,
+  craftingDisabled,
   onActivate,
 }: {
   inventory: Inventory
   label: string
   phase?: MatchFlowPhase
   hasPickedMap: boolean
+  craftingDisabled: boolean
   onActivate: (player: string, recipe: Recipe) => void
 }) {
-  const affordable = RECIPES.filter((recipe) => canAfford(recipe, inventory))
-  const locked = RECIPES.filter((recipe) => !canAfford(recipe, inventory))
+  const affordableCount = RECIPES_ALPHABETICAL.filter((recipe) => canAfford(recipe, inventory)).length
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="font-heading text-sm uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
-        <span className="text-xs text-muted-foreground">{affordable.length} craftable</span>
+        <span className="text-xs text-muted-foreground">{affordableCount} craftable</span>
       </div>
       <IngredientBar inventory={inventory} />
 
-      {affordable.length > 0 && (
-        <div className="space-y-1.5">
-          {affordable.map((recipe) => (
-            <div key={recipe.id} className="rounded-md border border-border bg-secondary/10 px-3 py-2">
+      <div className="space-y-1.5">
+          {RECIPES_ALPHABETICAL.map((recipe) => {
+            const affordable = canAfford(recipe, inventory)
+            const timingOpen = isRecipeTimingOpen(phase, hasPickedMap, craftingDisabled)
+            return (
+            <div key={recipe.id} className={`rounded-md border border-border px-3 py-2 ${affordable ? "bg-secondary/10" : "opacity-50"}`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{recipe.name}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{recipe.desc}</p>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <CostDisplay cost={recipe.cost} />
-                    <span className="text-xs text-muted-foreground/70">{recipe.timing}</span>
                   </div>
                 </div>
                 <Button
                   size="sm"
                   className="flex-shrink-0 text-xs"
                   variant="secondary"
-                  disabled={!isRecipeTimingOpen(recipe, phase, hasPickedMap)}
+                  disabled={!affordable || !timingOpen}
                   onClick={() => onActivate(label, recipe)}
                 >
                   Use
                 </Button>
               </div>
             </div>
-          ))}
-        </div>
-      )}
-
-      {locked.length > 0 && (
-        <details className="group">
-          <summary className="cursor-pointer text-xs text-muted-foreground/70 hover:text-muted-foreground">
-            {locked.length} locked recipes
-          </summary>
-          <div className="mt-1.5 space-y-1">
-            {locked.map((recipe) => (
-              <div key={recipe.id} className="rounded-md border border-border/50 px-3 py-2 opacity-50">
-                <p className="text-xs font-medium">{recipe.name}</p>
-                <CostDisplay cost={recipe.cost} />
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
+          )})}
+      </div>
     </div>
   )
 }
@@ -216,6 +195,7 @@ interface Props {
   onUseRecipe?: (player: string, recipeId: number, activation: RecipeActivation) => void
   recipeEvents?: RecipeEvent[]
   onUndoRecipe?: (eventId: string) => void
+  craftingDisabled?: boolean
 }
 
 export function RecipePanel({
@@ -228,6 +208,7 @@ export function RecipePanel({
   onUseRecipe,
   recipeEvents = [],
   onUndoRecipe,
+  craftingDisabled = false,
 }: Props) {
   const [pending, setPending] = useState<{ player: string; recipe: Recipe } | null>(null)
   const [activation, setActivation] = useState<RecipeActivation>({})
@@ -256,12 +237,12 @@ export function RecipePanel({
       <div className="space-y-6">
         <div className="space-y-3">
           <RecipeEvents entries={usedA} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} onActivate={openActivation} />
+          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} craftingDisabled={craftingDisabled} onActivate={openActivation} />
         </div>
         <Separator />
         <div className="space-y-3">
           <RecipeEvents entries={usedB} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} onActivate={openActivation} />
+          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} craftingDisabled={craftingDisabled} onActivate={openActivation} />
         </div>
       </div>
 

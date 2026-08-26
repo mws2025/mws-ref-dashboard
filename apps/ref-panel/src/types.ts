@@ -75,6 +75,7 @@ export interface MatchFlowState {
   homeModA?: HomeMod
   homeModB?: HomeMod
   currentSlot?: string
+  scoreOverridden?: boolean
   updatedAt?: string
 }
 

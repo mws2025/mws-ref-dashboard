@@ -168,7 +168,7 @@ match_id, slot, map_id, picked_by, banned_by, status, score_a, score_b, winner
 
 match_state:
 match_id, phase, roll_a, roll_b, roll_winner, first_picker, first_banner,
-home_mod_a, home_mod_b, turn_player, current_slot, updated_at
+home_mod_a, home_mod_b, turn_player, current_slot, score_overridden, updated_at
 
 inventory:
 match_id, player, egg, sugar, butter, flour, milk
@@ -253,6 +253,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
 | `GET` | `/api/match/:matchId/state` | Returns persisted flow state or its lobby-aware default. |
 | `POST` | `/api/match/:matchId/state` | Records rolls, order selection, or a player's home mod. |
+| `POST` | `/api/match/:matchId/match-score` | Stores an absolute manual match-star correction in `matches`. |
 | `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or corrective `unpick`. |
 | `POST` | `/api/match/:matchId/setup-map` | Binds both players' active recipes to the picked map and returns lobby setup commands. |
 | `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
@@ -318,9 +319,11 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
 `manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
-portal. A pick opens the recipe window; call `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }` when recipes
-are ready. Use `action: "unpick"` to clear picked or completed maps and reverse their map/recipe rewards; `unpick` does
-not require `player`.
+portal. Recipes are crafted during `craft` before a map is selected. After the pick, call
+`POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }`. Completed slots may be picked again; each replay is
+stored as another `match_maps` row. TB is rejected until both players are one point from victory, except when an active
+Caramel unlocks it as the wildcard slot. Use `action: "unpick"` to clear the latest picked or completed row and reverse
+its map/recipe rewards; `unpick` does not require `player`.
 
 `POST /api/match/:matchId/score` derives the winner from recipe-adjusted scores:
 
@@ -334,9 +337,10 @@ not require `player`.
 }
 ```
 
-Scores accept numbers, comma separators, and an optional trailing `%`. Replay recipes return `replayRequired: true` on
-the first run. Submit the replay through the same endpoint. Repeating a request after a lost response returns the
-already-committed result instead of applying rewards twice. Otherwise,
+Scores accept numbers, comma separators, and an optional trailing `%`. Crepe accuracy values are limited to 0-100.
+Replay recipes return `replayRequired: true` on the first run, and any tied result also requests another replay. Submit
+the replay through the same endpoint. Repeating a request after a lost response returns the already-committed result
+instead of applying rewards twice. Match stars are written to `matches` in the same settlement. Otherwise,
 the response contains final scores, winner, inventories, flow state, `nextPicker`, `ingredient`, `ingredientAmount`, and
 any scoring-mode restore commands. A map winner receives one pool ingredient; a player whose home mod matches that pool
 receives one additional ingredient even on a loss. A home-mod win therefore awards two.
@@ -363,6 +367,11 @@ the selected effect requires them:
 - `ingredient` is used by Omelette and Dough.
 - `rewardIngredients` must contain exactly two ingredients for Caramel.
 
+Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. Caramel
+persists a randomly selected configured beatmap in its event payload and overrides the wildcard setup command with that
+beatmap. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes are listed
+alphabetically.
+
 Other mutation bodies:
 
 | Route | JSON body |
@@ -370,6 +379,7 @@ Other mutation bodies:
 | `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
 | `POST /api/match/:matchId/create-lobby` | `{ "refUsername": "..." }` (players are read from the match sheet) |
 | `POST /api/match/:matchId/setup-map` | `{ "slot": "NM1" }` |
+| `POST /api/match/:matchId/match-score` | `{ "scoreA": 3, "scoreB": 2 }` |
 | `POST /api/match/:matchId/reset` | No body required. |
 | `POST /api/match/:matchId/join-lobby` | `{ "mpId": "123456" }` |
 | `POST /api/match/:matchId/close-lobby` | `{ "channel": "#mp_123", "messages": [{ "ts": "...", "from": "...", "message": "..." }] }` |

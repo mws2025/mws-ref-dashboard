@@ -6,7 +6,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
-import { formatLobbyTitle, lobbyModsForPool, parseRollAnnouncement } from "@/lib/match-rules"
+import {
+  formatLobbyTitle,
+  isTiebreakerReady,
+  lobbyModsForPool,
+  parseFinishedScoreAnnouncement,
+  parseRollAnnouncement,
+} from "@/lib/match-rules"
 import type {
   HomeMod,
   IngKey,
@@ -26,13 +32,15 @@ import { PlayerColumn } from "./PlayerColumn"
 import { RecipePanel } from "./RecipePanel"
 import { TestSimPanel } from "./TestSimPanel"
 
-type EventKind = "join" | "leave" | "roll" | "abort" | "other_join" | "other_roll" | "info"
+type EventKind = "join" | "leave" | "roll" | "score" | "map" | "start" | "abort" | "other_join" | "other_roll" | "info"
 
 interface RecipePickSetup {
   eventIds: string[]
   mods: string
   commandsBefore: string[]
   notices: string[]
+  beatmapId?: string
+  mapTitle?: string
 }
 
 interface MatchEvent {
@@ -67,11 +75,19 @@ function parseBanchoEvent(msg: string, ts: string, playerA: string, playerB: str
     return { id, ts, kind, text, player: who, value }
   }
 
+  const finished = parseFinishedScoreAnnouncement(msg)
+  if (finished) {
+    return { id, ts, kind: "score", text: `${finished.player} finished with ${finished.score.toLocaleString()}`, player: finished.player, value: finished.score }
+  }
+
+  if (/^Beatmap changed to:/i.test(msg)) return { id, ts, kind: "map", text: msg }
+  if (/^The match has started!?$/i.test(msg)) return { id, ts, kind: "start", text: "Match started" }
+
   if (msg === "The match has been aborted.") {
     return { id, ts, kind: "abort", text: "Match aborted" }
   }
 
-  return null
+  return { id, ts, kind: "info", text: msg }
 }
 
 function lobbyUrlToChannel(url?: string): string | undefined {
@@ -118,8 +134,8 @@ function nextActionHint(state: MatchFlowState | null, mappool: PoolMap[] | null)
       return `${state.turnPlayer ?? "Next player"} bans an available map.`
     case "craft":
       return currentMap
-        ? `Select recipes for ${currentMap.slot}, then set up the map in Match Control.`
-        : `${state.turnPlayer ?? "Next player"} picks a map.`
+        ? `Set up ${currentMap.slot} in Match Control.`
+        : `Craft recipes, then ${state.turnPlayer ?? "the next player"} picks a map.`
     case "play":
       return currentMap
         ? `Play ${currentMap.slot}; record scores in Match Control after both finish.`
@@ -160,6 +176,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
   const [scoreSubmitting, setScoreSubmitting] = useState(false)
   const [setupSubmitting, setSetupSubmitting] = useState(false)
+  const [detectedScores, setDetectedScores] = useState<{ slot: string; run: number; a?: number; b?: number }>({ slot: "", run: 0 })
   const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
@@ -169,6 +186,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const abbreviationRef = useRef("MWS")
   const stateActionQueue = useRef<Promise<void>>(Promise.resolve())
   const stateActionVersion = useRef(0)
+  const flowStateRef = useRef<MatchFlowState | null>(null)
+  flowStateRef.current = flowState
 
   function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
     const existing = invSaveTimers.current[player]
@@ -221,6 +240,17 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           if (event.player?.toLowerCase() === match.playerB.toLowerCase()) return { ...prev, b: event.value }
           return prev
         })
+      }
+      if (event.kind === "score" && event.player && typeof event.value === "number") {
+        const currentSlot = flowStateRef.current?.phase === "play" ? flowStateRef.current.currentSlot : undefined
+        if (currentSlot) {
+          setDetectedScores((current) => {
+            const base = current.slot === currentSlot ? current : { slot: currentSlot, run: 0 }
+            if (event.player?.toLowerCase() === match.playerA.toLowerCase()) return { ...base, a: event.value }
+            if (event.player?.toLowerCase() === match.playerB.toLowerCase()) return { ...base, b: event.value }
+            return current
+          })
+        }
       }
     }
   }, [match.playerA, match.playerB])
@@ -379,13 +409,18 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     ) : prev)
   }
 
-  function announceGameResult(scoreA: number, scoreB: number, nextPicker: string) {
+  function announceGameResult(scoreA: number, scoreB: number, nextPicker: string, inventories?: { a: Inventory; b: Inventory }) {
     const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
     const matchOver = scoreA >= winsNeeded || scoreB >= winsNeeded
     ircRef.current?.send(`${match.playerA} | ${scoreA} - ${scoreB} | ${match.playerB}`)
+    if (inventories) {
+      const formatInventory = (inventory: Inventory) =>
+        `Egg ${inventory.egg}, Sugar ${inventory.sugar}, Butter ${inventory.butter}, Flour ${inventory.flour}, Milk ${inventory.milk}`
+      setTimeout(() => ircRef.current?.send(`${match.playerA}: ${formatInventory(inventories.a)} | ${match.playerB}: ${formatInventory(inventories.b)}`), 600)
+    }
     if (!matchOver) {
-      setTimeout(() => ircRef.current?.send(`Next to pick: ${nextPicker}`), 600)
-      setTimeout(() => ircRef.current?.send(`!mp timer 120`), 1200)
+      setTimeout(() => ircRef.current?.send(`Next to pick: ${nextPicker}`), inventories ? 1200 : 600)
+      setTimeout(() => ircRef.current?.send(`!mp timer 120`), inventories ? 1800 : 1200)
     }
   }
 
@@ -423,6 +458,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
           setRecipeEvents(recipesData.events ?? [])
         }
+        setDetectedScores((current) => ({ slot, run: current.slot === slot ? current.run + 1 : 1 }))
         return
       }
       const winner = data.winner
@@ -434,12 +470,13 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       }
       if (data.inventories) setLiveInventory(data.inventories)
       if (data.state) setFlowState(data.state)
+      setDetectedScores({ slot: "", run: 0 })
       for (const command of data.restoreCommands ?? []) ircRef.current?.send(command)
       const nextPicker = data.nextPicker ?? opponentOf(winner, match.playerA, match.playerB)
       if (data.alreadyCompleted) {
         toast.info("This map score was already saved; match state refreshed")
       } else {
-        announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker)
+        announceGameResult(data.totals?.scoreA ?? liveScoreA, data.totals?.scoreB ?? liveScoreB, nextPicker, data.inventories)
       }
       const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
       if (recipesRes.ok) {
@@ -493,6 +530,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         toast.error(err.error ?? "Failed to use recipe")
         return
       }
+      const data = await res.json() as { state?: MatchFlowState }
+      if (data.state) setFlowState(data.state)
       await refreshRecipeSurfaces()
       toast.success(`${recipe.name} crafted`)
     })
@@ -547,6 +586,25 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     })
   }
 
+  async function editMatchScore(scoreA: number, scoreB: number) {
+    const res = await fetch(`/api/match/${match.id}/match-score`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scoreA, scoreB }),
+    })
+    if (!res.ok) {
+      const error = await res.json() as { error?: string }
+      toast.error(error.error ?? "Failed to update match score")
+      return
+    }
+    const data = await res.json() as { scoreA: number; scoreB: number; state?: MatchFlowState }
+    setLiveScoreA(data.scoreA)
+    setLiveScoreB(data.scoreB)
+    if (data.state) setFlowState(data.state)
+    toast.success("Match score updated")
+  }
+
   async function resetMatch() {
     const res = await fetch(`/api/match/${match.id}/reset`, {
       method: "POST",
@@ -577,6 +635,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     })) ?? null)
     setRecipeEvents([])
     setLatestRolls({})
+    setDetectedScores({ slot: "", run: 0 })
     setSelectedMap(null)
     toast.success("Match reset")
   }
@@ -591,7 +650,11 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   }
 
   async function sendPickSequence(map: PoolMap, channel: string, recipeSetup?: RecipePickSetup) {
-    if (map.beatmapId) await sendIrc(channel, `!mp map ${map.beatmapId} 0`)
+    const beatmapId = recipeSetup?.beatmapId ?? map.beatmapId
+    if (beatmapId) {
+      await sendIrc(channel, `!mp map ${beatmapId} 0`)
+      await new Promise((resolve) => setTimeout(resolve, 350))
+    }
     for (const command of recipeSetup?.commandsBefore ?? []) await sendIrc(channel, command)
     await sendIrc(channel, `!mp mods ${recipeSetup?.mods || lobbyModsForPool(map.pool, enforceNF)}`)
     for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
@@ -615,6 +678,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       }
       const data = await res.json() as { state?: MatchFlowState; recipeSetup?: RecipePickSetup }
       if (data.state) setFlowState(data.state)
+      setDetectedScores({ slot: map.slot, run: 0 })
       const channel = lobbyUrlToChannel(liveLobbyUrl)
       if (channel) await sendPickSequence(map, channel, data.recipeSetup)
       await refreshRecipeSurfaces()
@@ -678,6 +742,21 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     window.addEventListener("mousemove", onMove)
     window.addEventListener("mouseup", onUp)
   }
+
+  const tiebreakerReady = isTiebreakerReady(liveScoreA, liveScoreB, match.bestOf ?? 9)
+  const activeSlot = flowState?.currentSlot
+  const accuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
+    event.status === "active" &&
+    event.target?.toLowerCase() === activeSlot.toLowerCase() &&
+    (event.recipeId === 12 || event.payload.copiedEffectType === "accuracy_mode")
+  ))
+  const caramelUnlockedSlots = new Set(recipeEvents
+    .filter((event) => event.status === "active" && event.recipeId === 21 && event.target)
+    .map((event) => event.target?.toLowerCase()))
+  const selectedMapBlockedByTiebreaker = Boolean(selectedMap && (
+    (selectedMap.pool === "TB" && !tiebreakerReady && !caramelUnlockedSlots.has(selectedMap.slot.toLowerCase())) ||
+    (selectedMap.pool !== "TB" && tiebreakerReady)
+  ))
 
   return (
     <div className="flex h-svh flex-col bg-background text-foreground">
@@ -820,6 +899,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             })
           }}
           onResetMatch={() => void resetMatch()}
+          onScoreEdit={(scoreA, scoreB) => void editMatchScore(scoreA, scoreB)}
           homeModA={flowState?.homeModA}
           homeModB={flowState?.homeModB}
           homeModTurnPlayer={flowState?.phase === "home_mod" ? flowState.turnPlayer : undefined}
@@ -866,6 +946,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 onUseRecipe={handleRecipeUse}
                 recipeEvents={recipeEvents}
                 onUndoRecipe={handleUndoRecipe}
+                craftingDisabled={tiebreakerReady}
               />
             </TabsContent>
 
@@ -886,12 +967,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 onSetupMap={(map) => void setupPickedMap(map)}
                 setupSubmitting={setupSubmitting}
                 scoreSubmitting={scoreSubmitting}
+                detectedScores={detectedScores.slot === flowState?.currentSlot ? detectedScores : undefined}
+                accuracyMode={accuracyMode}
                 onSubmitScore={submitScore}
               />
               <Separator className="my-4" />
-              <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Event log</p>
+              <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground mb-3">Lobby activity (current session)</p>
               {liveEvents.length === 0 && (
-                <p className="text-xs text-muted-foreground/40 text-center pt-4">No events yet - connect a lobby to see activity.</p>
+                <p className="text-xs text-muted-foreground/40 text-center pt-4">No BanchoBot activity received in this browser session.</p>
               )}
               {liveEvents.slice().reverse().map((e) => (
                 <div key={e.id} className="rounded-md border border-border/60 bg-card/40 px-3 py-2 text-xs flex items-start gap-2">
@@ -901,6 +984,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                   <span className={
                     e.kind === "abort"      ? "text-destructive font-semibold" :
                     e.kind === "roll"       ? "text-[#9cb7c7]" :
+                    e.kind === "score"      ? "text-primary font-semibold" :
+                    e.kind === "map"        ? "text-[#9cb7c7]" :
+                    e.kind === "start"      ? "text-[#a8c29f] font-semibold" :
                     e.kind === "other_roll" ? "text-muted-foreground" :
                     e.kind === "join"       ? "text-[#a8c29f]" :
                     e.kind === "leave"      ? "text-[#a4564e]" :
@@ -952,10 +1038,16 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         playerA={match.playerA}
         playerB={match.playerB}
         allowedActions={
-          selectedMap?.status === "picked" || selectedMap?.status === "completed"
+          selectedMap?.status === "picked"
             ? ["unpick"]
+            : selectedMap?.status === "completed"
+              ? flowState?.phase === "craft" && !flowState.currentSlot && !selectedMapBlockedByTiebreaker
+                ? ["pick", "unpick"]
+                : ["unpick"]
             : selectedMap?.status !== "available"
             ? []
+            : selectedMapBlockedByTiebreaker
+              ? []
             : flowState?.currentSlot
               ? []
             : manualMapActions
@@ -966,12 +1058,20 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 ? ["pick"]
                 : []
         }
-        expectedPlayer={selectedMap?.status === "available" && !manualMapActions ? flowState?.turnPlayer : undefined}
+        expectedPlayer={(selectedMap?.status === "available" || selectedMap?.status === "completed") && !manualMapActions ? flowState?.turnPlayer : undefined}
         helperText={
-          selectedMap?.status === "picked" || selectedMap?.status === "completed"
-            ? "Remove this played pick and return the map to available."
+          selectedMap?.status === "picked"
+            ? "Remove this pending pick and return the map to available."
+            : selectedMap?.status === "completed"
+              ? flowState?.phase === "craft" && !selectedMapBlockedByTiebreaker
+                ? "Repick this slot, or remove its latest completed result."
+                : "Remove this map's latest completed result."
             : selectedMap?.status !== "available"
             ? "This map is already locked."
+            : selectedMapBlockedByTiebreaker
+              ? selectedMap.pool === "TB"
+                ? "The tiebreaker opens at mutual match point or through Caramel."
+                : "Both players are at match point. Play the tiebreaker."
             : flowState?.currentSlot
               ? `Finish or unpick ${flowState.currentSlot} before choosing another map.`
             : manualMapActions

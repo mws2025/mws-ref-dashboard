@@ -153,6 +153,7 @@ interface Props {
   onSendReminder?: () => void
   onForfeit?: (winner: string) => void
   onResetMatch?: () => void
+  onScoreEdit?: (scoreA: number, scoreB: number) => void
   homeModA?: HomeMod
   homeModB?: HomeMod
   homeModTurnPlayer?: string
@@ -181,7 +182,7 @@ export function PlayerColumn({
   invA, invB, invLoading,
   round, refName, streamer,
   onInvAChange, onInvBChange,
-  onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit, onResetMatch,
+  onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit, onResetMatch, onScoreEdit,
   homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
   lobbyNameMismatch, onRetryJoin, onClearLobbyMismatch,
   matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
@@ -194,6 +195,7 @@ export function PlayerColumn({
   const [joinOpen, setJoinOpen] = useState(false)
   const [mpIdInput, setMpIdInput] = useState("")
   const [forfeitOpen, setForfeitOpen] = useState(false)
+  const [scoreEdit, setScoreEdit] = useState<{ a: string; b: string } | null>(null)
 
   function handleJoinConfirm() {
     const cleaned = mpIdInput.trim().replace(/^#?mp_?/i, "")
@@ -266,6 +268,16 @@ export function PlayerColumn({
 
         {/* Match meta */}
         <div className="border-t border-border p-4">
+          <Button
+            size="sm"
+            variant="outline"
+            className="mb-3 w-full text-xs"
+            disabled={isDemo}
+            onClick={() => setScoreEdit({ a: String(scoreA), b: String(scoreB) })}
+          >
+            <Pencil className="h-3 w-3" />
+            Edit match score
+          </Button>
           <div className="grid grid-cols-[4.5rem_1fr] gap-x-2 gap-y-1.5 text-xs">
             <span className="font-heading uppercase tracking-[0.12em] text-muted-foreground">Format</span>
             <span className="text-foreground">Bo{bestOf}</span>
@@ -372,6 +384,57 @@ export function PlayerColumn({
           <DialogFooter>
             <Button size="sm" variant="outline" onClick={() => { setJoinOpen(false); setMpIdInput("") }}>Cancel</Button>
             <Button size="sm" disabled={!mpIdInput.trim()} onClick={handleJoinConfirm}>Join</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scoreEdit !== null} onOpenChange={(open) => { if (!open) setScoreEdit(null) }}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Edit match score</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">{playerA}</span>
+              <Input
+                type="number"
+                min={0}
+                max={winsNeeded}
+                value={scoreEdit?.a ?? ""}
+                onChange={(event) => setScoreEdit((current) => current ? { ...current, a: event.target.value } : current)}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-xs text-muted-foreground">{playerB}</span>
+              <Input
+                type="number"
+                min={0}
+                max={winsNeeded}
+                value={scoreEdit?.b ?? ""}
+                onChange={(event) => setScoreEdit((current) => current ? { ...current, b: event.target.value } : current)}
+              />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button size="sm" variant="outline" onClick={() => setScoreEdit(null)}>Cancel</Button>
+            <Button
+              size="sm"
+              disabled={
+                scoreEdit === null ||
+                !scoreEdit.a.trim() || !scoreEdit.b.trim() ||
+                !Number.isInteger(Number(scoreEdit.a)) ||
+                !Number.isInteger(Number(scoreEdit.b)) ||
+                Number(scoreEdit.a) < 0 || Number(scoreEdit.b) < 0 ||
+                Number(scoreEdit.a) > winsNeeded || Number(scoreEdit.b) > winsNeeded
+              }
+              onClick={() => {
+                if (!scoreEdit) return
+                onScoreEdit?.(Number(scoreEdit.a), Number(scoreEdit.b))
+                setScoreEdit(null)
+              }}
+            >
+              Save score
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

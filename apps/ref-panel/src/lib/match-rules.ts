@@ -3,6 +3,11 @@ export type RollAnnouncement = {
   value: number
 }
 
+export type FinishedScoreAnnouncement = {
+  player: string
+  score: number
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null
@@ -14,6 +19,20 @@ export function parseRollAnnouncement(message: string): RollAnnouncement | null 
 
 export function isValidRoll(value: number): boolean {
   return Number.isInteger(value) && value >= 1 && value <= 100
+}
+
+export function parseFinishedScoreAnnouncement(message: string): FinishedScoreAnnouncement | null {
+  const match = message.trim().match(/^(.+?) finished playing \(Score:\s*([\d,]+),/i)
+  if (!match) return null
+
+  const player = match[1]?.trim() ?? ""
+  const score = Number((match[2] ?? "").replace(/,/g, ""))
+  return player && Number.isFinite(score) && score >= 0 ? { player, score } : null
+}
+
+export function isTiebreakerReady(scoreA: number, scoreB: number, bestOf: number): boolean {
+  const winsNeeded = Math.ceil(bestOf / 2)
+  return scoreA === winsNeeded - 1 && scoreB === winsNeeded - 1
 }
 
 export function formatLobbyMods(mods: readonly string[], enforceNF: boolean): string {

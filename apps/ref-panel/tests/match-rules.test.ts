@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test"
+import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
   formatLobbyTitle,
   homeModIngredientAwards,
+  isTiebreakerReady,
   lobbyInviteTarget,
   lobbyModsForPool,
   nextPlayerAfterPick,
   parseScoreValue,
   parseRollAnnouncement,
+  parseFinishedScoreAnnouncement,
 } from "../src/lib/match-rules.ts"
 
 describe("roll announcements", () => {
@@ -49,6 +52,12 @@ describe("match progression", () => {
     expect(nextPlayerAfterPick("Player B", "Player A", "Player B")).toBe("Player A")
   })
 
+  test("only opens the tiebreaker at mutual match point", () => {
+    expect(isTiebreakerReady(4, 4, 9)).toBe(true)
+    expect(isTiebreakerReady(4, 3, 9)).toBe(false)
+    expect(isTiebreakerReady(5, 5, 9)).toBe(false)
+  })
+
   test("awards one home ingredient on a loss and two on a win", () => {
     expect(homeModIngredientAwards("HR", "Player A", "Player A", "Player B", "HR", "DT")).toEqual({ playerA: 2, playerB: 0 })
     expect(homeModIngredientAwards("DT", "Player A", "Player A", "Player B", "HR", "DT")).toEqual({ playerA: 1, playerB: 1 })
@@ -66,9 +75,31 @@ describe("referee input and lobby formatting", () => {
     expect(parseScoreValue("invalid")).toBeNull()
   })
 
+  test("parses BanchoBot finish scores", () => {
+    expect(parseFinishedScoreAnnouncement("WEARY finished playing (Score: 987,432, PASSED).")).toEqual({
+      player: "WEARY",
+      score: 987432,
+    })
+    expect(parseFinishedScoreAnnouncement("The match has started!")).toBeNull()
+  })
+
   test("formats lobby names and invite targets", () => {
     expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: [Player A] vs [Player B]")
     expect(lobbyInviteTarget("WEARY", "12345")).toBe("#12345")
     expect(lobbyInviteTarget("Cinnamon Twist")).toBe("Cinnamon_Twist")
+  })
+})
+
+describe("recipe catalog", () => {
+  test("is alphabetical and distinguishes both Cinnamon Roll recipes", () => {
+    const names = RECIPES_ALPHABETICAL.map((recipe) => recipe.name)
+    expect(names).toEqual([...names].sort((left, right) => left.localeCompare(right, "en", { numeric: true })))
+    expect(RECIPES.find((recipe) => recipe.id === 8)?.name).toBe("Cinnamon Roll (Protect)")
+    expect(RECIPES.find((recipe) => recipe.id === 8)?.cost).toEqual({ egg: 1, sugar: 2, butter: 1, flour: 1, milk: 1 })
+    expect(RECIPES.find((recipe) => recipe.id === 19)?.name).toBe("Cinnamon Roll (Unban)")
+  })
+
+  test("defines Quiche as forced HD", () => {
+    expect(RECIPES.find((recipe) => recipe.id === 11)?.desc).toContain("HD")
   })
 })

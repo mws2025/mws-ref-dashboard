@@ -115,6 +115,7 @@ type MatchFlowState = {
   homeModA?: HomeMod
   homeModB?: HomeMod
   currentSlot?: string
+  scoreOverridden?: boolean
   updatedAt?: string
 }
 
@@ -175,6 +176,7 @@ const MATCH_STATE_HEADERS = [
   "home_mod_a",
   "home_mod_b",
   "current_slot",
+  "score_overridden",
   "updated_at",
 ] as const
 const INVENTORY_KEYS = ["egg", "sugar", "butter", "flour", "milk"] as const
@@ -213,7 +215,7 @@ const MAP_BOUND_EFFECTS = new Set([
 const BUILTIN_ITEM_RECORDS: SheetRecord[] = [
   {
     item_id: "item_8",
-    name: "Cinnamon Roll",
+    name: "Cinnamon Roll (Protect)",
     cost_egg: "1",
     cost_sugar: "2",
     cost_butter: "1",
@@ -252,7 +254,7 @@ const BUILTIN_ITEM_RECORDS: SheetRecord[] = [
   },
   {
     item_id: "item_19",
-    name: "Cinnamon Roll",
+    name: "Cinnamon Roll (Unban)",
     cost_egg: "1",
     cost_sugar: "0",
     cost_butter: "2",
@@ -1224,6 +1226,11 @@ function defaultFlowState(matchId: string, hasLobby: boolean): MatchFlowState {
   }
 }
 
+function isTiebreakerReady(scoreA: number, scoreB: number, bestOf: number): boolean {
+  const winsNeeded = Math.ceil(bestOf / 2)
+  return scoreA === winsNeeded - 1 && scoreB === winsNeeded - 1
+}
+
 function matchFlowFromRecord(record: SheetRecord, matchId: string, hasLobby: boolean): MatchFlowState {
   const phaseRaw = firstValue(record, ["phase"]) as MatchFlowPhase
   const phase: MatchFlowPhase = [
@@ -1250,6 +1257,7 @@ function matchFlowFromRecord(record: SheetRecord, matchId: string, hasLobby: boo
     homeModA: normalizeHomeMod(firstValue(record, ["home_mod_a", "homemoda"])),
     homeModB: normalizeHomeMod(firstValue(record, ["home_mod_b", "homemodb"])),
     currentSlot: firstValue(record, ["current_slot", "currentslot"]) || undefined,
+    scoreOverridden: firstValue(record, ["score_overridden", "scoreoverridden"]).toLowerCase() === "true",
     updatedAt: firstValue(record, ["updated_at", "updatedat"]) || undefined,
   }
 }
@@ -1282,6 +1290,7 @@ async function writeMatchFlowState(env: Bindings, state: MatchFlowState): Promis
       case "home_mod_a": return nextState.homeModA ?? ""
       case "home_mod_b": return nextState.homeModB ?? ""
       case "current_slot": return nextState.currentSlot ?? ""
+      case "score_overridden": return nextState.scoreOverridden ? "true" : "false"
       case "updated_at": return nextState.updatedAt ?? ""
       default: return ""
     }
@@ -1494,7 +1503,7 @@ function effectTypeForEvent(items: SheetRecord[], event: RecipeEventRecord): str
 }
 
 function itemPayload(item: SheetRecord): Record<string, unknown> {
-  if (firstValue(item, ["item_id", "id"]) === "item_11") return { mod: "PS" }
+  if (firstValue(item, ["item_id", "id"]) === "item_11") return { mod: "HD" }
   return parseJsonRecord(firstValue(item, ["effect_payload", "payload"]))
 }
 
@@ -1504,6 +1513,11 @@ async function getItemRecords(env: Bindings): Promise<SheetRecord[]> {
 
 function itemRecordsFromSheetValues(values: string[][]): SheetRecord[] {
   const records = sheetRowsToRecords(values)
+  for (const record of records) {
+    const itemId = firstValue(record, ["item_id", "id"])
+    if (itemId === "item_8") record.name = "Cinnamon Roll (Protect)"
+    if (itemId === "item_19") record.name = "Cinnamon Roll (Unban)"
+  }
   for (const builtin of BUILTIN_ITEM_RECORDS) {
     const itemId = firstValue(builtin, ["item_id"])
     if (!records.some((record) => firstValue(record, ["item_id", "id"]) === itemId)) {
@@ -1636,6 +1650,8 @@ type RecipePickSetup = {
   mods: string
   commandsBefore: string[]
   notices: string[]
+  beatmapId?: string
+  mapTitle?: string
 }
 
 async function activateRecipesForPick(
@@ -1673,6 +1689,8 @@ async function activateRecipesForPick(
   let mods = lobbyModsForPool(pool, enforceNF)
   const commandsBefore: string[] = []
   const notices: string[] = []
+  let beatmapId: string | undefined
+  let mapTitle: string | undefined
   const teamMode = teamModeToInt(configMap.get("team mode") ?? "")
   const lobbySize = formatToLobbySize(configMap.get("format") ?? "1v1")
 
@@ -1690,20 +1708,24 @@ async function activateRecipesForPick(
       notices.push(`Both players must use their selected Custard mods: ${String(payload.modA ?? payload.mod ?? "")} / ${String(payload.modB ?? payload.mod ?? "")}.`)
     } else if (effectType === "mod_force_both") {
       const forcedMod = String(payload.mod ?? "").toUpperCase()
-      if (forcedMod === "PS") {
-        mods = formatLobbyMods(["Freemod"], enforceNF)
-        notices.push("Quiche active: both players must enable PS for this map.")
-      } else if (forcedMod) {
+      if (forcedMod) {
         mods = addLobbyMod(mods, forcedMod, enforceNF)
+        if (event.itemId === "item_11") notices.push("Quiche active: HD is forced for both players on this map.")
       }
     } else if (effectType === "accuracy_mode") {
       commandsBefore.push(`!mp set ${teamMode} 1 ${lobbySize}`)
     } else if (effectType === "scoring_mode") {
       commandsBefore.push(`!mp set ${teamMode} 0 ${lobbySize}`)
+    } else if (effectType === "wildcard_slot") {
+      beatmapId = String(payload.wildcardBeatmapId ?? "").trim() || undefined
+      mapTitle = String(payload.wildcardMap ?? "").trim() || undefined
+      const wildcardPool = String(payload.wildcardPool ?? "").trim().toUpperCase()
+      if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
+      if (mapTitle) notices.push(`Caramel wildcard: ${mapTitle}`)
     }
   }
 
-  return { eventIds: active.map((event) => event.id), mods, commandsBefore, notices }
+  return { eventIds: active.map((event) => event.id), mods, commandsBefore, notices, beatmapId, mapTitle }
 }
 
 function getMapPoolForSlot(poolRecords: SheetRecord[], slot: string): string {
@@ -1965,9 +1987,11 @@ app.get("/api/match/:matchId/mappool", async (c) => {
   const playerB   = c.req.query("playerB") ?? ""
 
   try {
-    const [poolValues, matchMapValues] = await Promise.all([
-      getSheetValuesSafe(c.env, "mappool!A1:Z"),
-      getSheetValuesSafe(c.env, "match_maps!A1:Z"),
+    const [poolValues, matchMapValues, matchValues, stateValues] = await getSheetValuesBatch(c.env, [
+      "mappool!A1:Z",
+      "match_maps!A1:Z",
+      "matches!A1:Z",
+      `${MATCH_STATE_SHEET}!A1:Z`,
     ])
 
     const poolRecords     = sheetRowsToRecords(poolValues)
@@ -1999,8 +2023,15 @@ app.get("/api/match/:matchId/mappool", async (c) => {
     })
 
     const matchMaps = matchMapRecords.filter((r) => r["match_id"]?.trim() === matchId)
-    const scoreA = matchMaps.filter((r) => r["winner"]?.trim() === playerA).length
-    const scoreB = matchMaps.filter((r) => r["winner"]?.trim() === playerB).length
+    const countedScoreA = countCompletedWins(matchMaps, matchId, playerA)
+    const countedScoreB = countCompletedWins(matchMaps, matchId, playerB)
+    const matchRecord = sheetRowsToRecords(matchValues).find((record) => firstValue(record, ["match_id", "id"]) === matchId)
+    const stateRecord = sheetRowsToRecords(stateValues).find((record) => firstValue(record, ["match_id", "id"]) === matchId)
+    const scoreOverridden = firstValue(stateRecord ?? {}, ["score_overridden", "scoreoverridden"]).toLowerCase() === "true"
+    const storedScoreA = parseNumberCell(firstValue(matchRecord ?? {}, ["score_a", "scorea"]))
+    const storedScoreB = parseNumberCell(firstValue(matchRecord ?? {}, ["score_b", "scoreb"]))
+    const scoreA = scoreOverridden ? storedScoreA ?? 0 : Math.max(storedScoreA ?? 0, countedScoreA)
+    const scoreB = scoreOverridden ? storedScoreB ?? 0 : Math.max(storedScoreB ?? 0, countedScoreB)
 
     return c.json({ mappool, scoreA, scoreB })
   } catch (error) {
@@ -2218,6 +2249,58 @@ app.post("/api/match/:matchId/state", async (c) => {
   }
 })
 
+app.post("/api/match/:matchId/match-score", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const scoreA = Number(body.scoreA)
+  const scoreB = Number(body.scoreB)
+  try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
+    if (!Number.isInteger(scoreA) || !Number.isInteger(scoreB) || scoreA < 0 || scoreB < 0 || scoreA > winsNeeded || scoreB > winsNeeded) {
+      return c.json({ error: `Scores must be whole numbers from 0 to ${winsNeeded}` }, 400)
+    }
+
+    const before = { scoreA: match.scoreA ?? 0, scoreB: match.scoreB ?? 0 }
+    await updateMatchFields(c.env, matchId, { score_a: String(scoreA), score_b: String(scoreB) })
+    const currentState = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const scoreReached = scoreA >= winsNeeded || scoreB >= winsNeeded
+    const phase = scoreReached && currentState.phase !== "completed"
+      ? "ready_result"
+      : !scoreReached && currentState.phase === "ready_result"
+        ? "craft"
+        : currentState.phase
+    const state = await writeMatchFlowState(c.env, {
+      ...currentState,
+      scoreOverridden: true,
+      phase,
+      ...(scoreReached
+        ? { turnPlayer: undefined, currentSlot: undefined }
+        : phase === "craft" ? { turnPlayer: currentState.firstPicker, currentSlot: undefined } : {}),
+    })
+    await appendAuditLog(
+      c.env,
+      sessionUser?.username ?? "unknown",
+      "match_score_edit",
+      "match",
+      matchId,
+      JSON.stringify(before),
+      JSON.stringify({ scoreA, scoreB }),
+    ).catch(() => {})
+    return c.json({ ok: true, scoreA, scoreB, state })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Match score update failed" }, 500)
+  }
+})
+
 app.post("/api/match/:matchId/reset", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
@@ -2301,6 +2384,7 @@ app.post("/api/match/:matchId/reset", async (c) => {
       home_mod_a: "",
       home_mod_b: "",
       current_slot: "",
+      score_overridden: "false",
       updated_at: now,
     })
 
@@ -2369,7 +2453,14 @@ app.post("/api/match/:matchId/score", async (c) => {
     const pickedByIdx = idx("picked_by")
     const winnerIdx = idx("winner")
     const statusIdx = idx("status")
-    const existingRowIdx = rows.findIndex((row) => row[matchIdIdx]?.trim() === matchId && row[slotIdx]?.trim() === slot)
+    let existingRowIdx = -1
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index]
+      if (row?.[matchIdIdx]?.trim() === matchId && row[slotIdx]?.trim() === slot) {
+        existingRowIdx = index
+        break
+      }
+    }
     const beforeRow = existingRowIdx >= 0 ? rows[existingRowIdx] : undefined
     const beforeJson = beforeRow ? JSON.stringify(beforeRow) : "{}"
     const beforeStatus = beforeRow?.[statusIdx]?.trim().toLowerCase() ?? ""
@@ -2387,9 +2478,11 @@ app.post("/api/match/:matchId/score", async (c) => {
         ? matchFlowFromRecord(stateRecord, matchId, Boolean(match.lobbyUrl))
         : defaultFlowState(matchId, Boolean(match.lobbyUrl))
       const storedWinner = beforeRow?.[winnerIdx]?.trim() ?? ""
+      const countedA = countCompletedWins(sheetRowsToRecords(matchMapsValues), matchId, playerA)
+      const countedB = countCompletedWins(sheetRowsToRecords(matchMapsValues), matchId, playerB)
       const totals = {
-        scoreA: countCompletedWins(sheetRowsToRecords(matchMapsValues), matchId, playerA),
-        scoreB: countCompletedWins(sheetRowsToRecords(matchMapsValues), matchId, playerB),
+        scoreA: state.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedA),
+        scoreB: state.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedB),
       }
       return c.json({
         ok: true,
@@ -2420,10 +2513,12 @@ app.post("/api/match/:matchId/score", async (c) => {
       "config!A:B",
       `${MATCH_STATE_SHEET}!A1:Z`,
       "inventory!A1:Z",
+      "matches!A1:Z",
     ])
     const [itemEventValues, itemValues, poolValues, configValues] = scoreSheetValues
     let stateValues = scoreSheetValues[4]
     let inventoryValues = scoreSheetValues[5]
+    const matchValues = scoreSheetValues[6]
     const recipeEvents = sheetRowsToRecords(itemEventValues)
       .map(parseRecipeEventRecord)
       .filter((event): event is RecipeEventRecord => event !== null && event.matchId === matchId)
@@ -2463,6 +2558,9 @@ app.post("/api/match/:matchId/score", async (c) => {
       ...itemPayload(itemForEvent(items, event) ?? {}),
       ...event.payload,
     })
+    if (activeEvents.some((event) => effect(event) === "accuracy_mode") && (rawScoreA > 100 || rawScoreB > 100)) {
+      return c.json({ error: "Accuracy values must be between 0% and 100%" }, 400)
+    }
 
     const applyScoreEffects = (inputA: number, inputB: number): { scoreA: number; scoreB: number } => {
       let scoreA = inputA
@@ -2539,7 +2637,17 @@ app.post("/api/match/:matchId/score", async (c) => {
       scoreA = Math.max(firstAdjusted.scoreA, currentAdjusted.scoreA)
       scoreB = Math.max(firstAdjusted.scoreB, currentAdjusted.scoreB)
     }
-    if (scoreA === scoreB) return c.json({ error: "Adjusted scores are tied; resolve the tie before submitting" }, 409)
+    if (scoreA === scoreB) {
+      return c.json({
+        ok: true,
+        replayRequired: true,
+        slot,
+        rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
+        adjustedScores: { scoreA, scoreB },
+        state: flowBefore,
+        notices: ["Scores are tied. Replay this map and submit the next result."],
+      })
+    }
     const winner = scoreA > scoreB ? playerA : playerB
     const loser = samePlayer(winner, playerA) ? playerB : playerA
     const margin = Math.abs(scoreA - scoreB)
@@ -2547,9 +2655,13 @@ app.post("/api/match/:matchId/score", async (c) => {
     if (existingRowIdx < 0) return c.json({ error: `${slot} must be picked before scoring` }, 409)
 
     const matchMapRecordsBefore = sheetRowsToRecords(matchMapsValues)
+    const countedScoreA = countCompletedWins(matchMapRecordsBefore, matchId, playerA)
+    const countedScoreB = countCompletedWins(matchMapRecordsBefore, matchId, playerB)
+    const startingScoreA = flowBefore.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedScoreA)
+    const startingScoreB = flowBefore.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedScoreB)
     const totals = {
-      scoreA: countCompletedWins(matchMapRecordsBefore, matchId, playerA) + (!wasCompleted && winner === playerA ? 1 : 0),
-      scoreB: countCompletedWins(matchMapRecordsBefore, matchId, playerB) + (!wasCompleted && winner === playerB ? 1 : 0),
+      scoreA: startingScoreA + (!wasCompleted && samePlayer(winner, playerA) ? 1 : 0),
+      scoreB: startingScoreB + (!wasCompleted && samePlayer(winner, playerB) ? 1 : 0),
     }
 
     const poolRecords = sheetRowsToRecords(poolValues)
@@ -2666,6 +2778,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       phase: matchOver ? "ready_result" : "craft",
       turnPlayer: matchOver ? undefined : nextPicker,
       currentSlot: undefined,
+      scoreOverridden: true,
       updatedAt: now,
     }
 
@@ -2688,6 +2801,17 @@ app.post("/api/match/:matchId/score", async (c) => {
       score_b: String(scoreB),
       winner,
       status: "completed",
+    })
+
+    const [matchHeaders, ...matchRows] = matchValues
+    const normalizedMatchHeaders = matchHeaders?.map(normalizeHeader) ?? []
+    const matchIdColumn = normalizedMatchHeaders.indexOf("match_id")
+    const matchRowIndex = matchRows.findIndex((row) => row[matchIdColumn]?.trim() === matchId)
+    if (!matchHeaders || matchRowIndex < 0) throw new Error("Match row missing")
+    pushFields("matches", matchHeaders, matchRowIndex, {
+      score_a: String(totals.scoreA),
+      score_b: String(totals.scoreB),
+      current_map: "",
     })
 
     const [inventoryHeaders, ...inventoryRows] = inventoryValues
@@ -2723,6 +2847,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       phase: flowState.phase,
       turn_player: flowState.turnPlayer ?? "",
       current_slot: "",
+      score_overridden: "true",
       updated_at: now,
     })
 
@@ -3002,16 +3127,18 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     const item = itemRecords.find((record) => firstValue(record, ["item_id", "id"]) === recipeId)
     if (!item) return c.json({ error: "Recipe not found" }, 404)
     if (firstValue(item, ["enabled"]).toLowerCase() === "false") return c.json({ error: "Recipe disabled" }, 409)
-    const timing = firstValue(item, ["timing"]).toLowerCase().replace(/[\s-]+/g, "_")
     const flowState = await getMatchFlowState(c.env, matchId, true)
-    const timingOpen =
-      timing === "any" ||
-      (timing === "ban_phase" && flowState.phase === "ban") ||
-      (timing === "pick_phase" && flowState.phase === "craft" && Boolean(flowState.currentSlot)) ||
-      (timing === "before_map" && flowState.phase === "craft" && Boolean(flowState.currentSlot)) ||
-      (timing === "after_score" && flowState.phase === "play")
+    const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
+    const countedScoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
+    const countedScoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
+    const currentScoreA = flowState.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedScoreA)
+    const currentScoreB = flowState.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedScoreB)
+    if (isTiebreakerReady(currentScoreA, currentScoreB, match.bestOf ?? 5)) {
+      return c.json({ error: "Recipes cannot be crafted for the tiebreaker" }, 409)
+    }
+    const timingOpen = flowState.phase === "craft" && !flowState.currentSlot
     if (!timingOpen) {
-      return c.json({ error: `${firstValue(item, ["name"]) || "Recipe"} cannot be used during ${flowState.phase}` }, 409)
+      return c.json({ error: `${firstValue(item, ["name"]) || "Recipe"} must be crafted before the map is selected` }, 409)
     }
 
     const events = await getRecipeEvents(c.env, matchId)
@@ -3070,11 +3197,6 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       activationPayload.modB = modB
     }
 
-    if (timing === "after_score") {
-      target = flowState.currentSlot ?? ""
-      if (!target) return c.json({ error: "No map is currently awaiting a score" }, 409)
-    }
-
     const ingredientRaw = typeof body.ingredient === "string"
       ? body.ingredient.trim().toLowerCase()
       : String(effectPayload.ingredient ?? "").toLowerCase()
@@ -3083,8 +3205,11 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       if (!ingredient) return c.json({ error: "A valid ingredient selection is required" }, 400)
       activationPayload.ingredient = ingredient
     }
+    if (effectType === "extra_ban") {
+      activationPayload.postBanCraft = true
+      activationPayload.resumePicker = flowState.turnPlayer ?? flowState.firstPicker ?? player
+    }
 
-    const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
     const poolRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "mappool!A1:Z"))
     const matchPoolRecords = match.mappool
       ? poolRecords.filter((record) => firstValue(record, ["round"]).toLowerCase() === match.mappool?.toLowerCase())
@@ -3123,13 +3248,26 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       })
       target = firstValue(wildcard ?? {}, ["map_id", "slot"])
       if (!target) return c.json({ error: "No available wildcard/TB slot exists in this mappool" }, 409)
+      const randomCandidates = poolRecords.filter((record) =>
+        firstValue(record, ["mod_pool", "pool"]).toUpperCase() !== "TB" &&
+        /^\d+$/.test(firstValue(record, ["beatmap_id"]))
+      )
+      if (randomCandidates.length === 0) return c.json({ error: "No wildcard beatmaps are configured" }, 409)
+      const randomBytes = new Uint32Array(1)
+      crypto.getRandomValues(randomBytes)
+      const randomMap = randomCandidates[(randomBytes[0] ?? 0) % randomCandidates.length]
       activationPayload.rewardIngredients = rewards
       activationPayload.wildcardSlot = target
+      activationPayload.wildcardBeatmapId = firstValue(randomMap ?? {}, ["beatmap_id"])
+      activationPayload.wildcardMap = firstValue(randomMap ?? {}, ["title", "map"])
+      activationPayload.wildcardSourceSlot = firstValue(randomMap ?? {}, ["map_id", "slot"])
+      activationPayload.wildcardSourceRound = firstValue(randomMap ?? {}, ["round"])
+      activationPayload.wildcardPool = firstValue(randomMap ?? {}, ["mod_pool", "pool"]).toUpperCase()
     }
 
     if (effectType === "comeback_bonus") {
-      const scoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
-      const scoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
+      const scoreA = currentScoreA
+      const scoreB = currentScoreB
       const playerScore = samePlayer(player, match.playerA) ? scoreA : scoreB
       const opponentScore = samePlayer(player, match.playerA) ? scoreB : scoreA
       const minDeficit = Number(effectPayload.min_deficit ?? effectPayload.minDeficit ?? 2) || 2
@@ -3196,6 +3334,14 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       resolved_at: immediate ? now : "",
       resolution: JSON.stringify(resolution),
     })
+    const nextState = effectType === "extra_ban"
+      ? await writeMatchFlowState(c.env, {
+          ...flowState,
+          phase: "ban",
+          turnPlayer: player,
+          currentSlot: undefined,
+        })
+      : flowState
     await appendAuditLog(
       c.env,
       sessionUser?.username ?? "unknown",
@@ -3220,6 +3366,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
         resolution,
       },
       inventory,
+      state: nextState,
     })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Recipe use failed" }, 500)
@@ -3397,9 +3544,11 @@ app.get("/api/public/match/:matchId/snapshot", async (c) => {
         samePlayer(firstValue(record, ["player", "player_id"]), player)
       )
     )
+    const countedRed = countCompletedWins(matchMaps, matchId, match.playerA)
+    const countedBlue = countCompletedWins(matchMaps, matchId, match.playerB)
     const stars = {
-      red: countCompletedWins(matchMaps, matchId, match.playerA),
-      blue: countCompletedWins(matchMaps, matchId, match.playerB),
+      red: flowState.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedRed),
+      blue: flowState.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedBlue),
     }
 
     const response = c.json({
@@ -4041,21 +4190,54 @@ app.post("/api/match/:matchId/action", async (c) => {
     const scoreBIdx   = idx("score_b")
     const winnerIdx   = idx("winner")
 
-    const existingRowIdx = rows.findIndex(
-      (r) => r[matchIdIdx]?.trim() === matchId && r[slotIdx]?.trim() === slot
-    )
+    let existingRowIdx = -1
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index]
+      if (row?.[matchIdIdx]?.trim() === matchId && row[slotIdx]?.trim() === slot) {
+        existingRowIdx = index
+        break
+      }
+    }
 
     const existingRow = existingRowIdx >= 0 ? rows[existingRowIdx] : undefined
     const beforeJson = existingRow ? JSON.stringify(existingRow) : "{}"
     const beforePickedBy = existingRow?.[pickedByIdx]?.trim() || undefined
     const existingStatus = existingRow?.[statusIdx]?.trim().toLowerCase() || "available"
+    const repickingCompleted = action === "pick" && existingStatus === "completed"
+    const matchMapRecords = sheetRowsToRecords(matchMapsValues)
+    const countedScoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
+    const countedScoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
+    const currentScoreA = flowState.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedScoreA)
+    const currentScoreB = flowState.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedScoreB)
+    if (action === "pick") {
+      const isTiebreaker = slot.toUpperCase().startsWith("TB")
+      const tiebreakerReady = isTiebreakerReady(currentScoreA, currentScoreB, match.bestOf ?? 5)
+      let wildcardUnlocked = false
+      if (isTiebreaker && !tiebreakerReady) {
+        const [recipeEvents, recipeItems] = await Promise.all([
+          getRecipeEvents(c.env, matchId),
+          getItemRecords(c.env),
+        ])
+        wildcardUnlocked = recipeEvents.some((event) =>
+          event.status === "active" &&
+          samePlayer(event.target, slot) &&
+          effectTypeForEvent(recipeItems, event) === "wildcard_slot"
+        )
+      }
+      if (isTiebreaker && !tiebreakerReady && !wildcardUnlocked) {
+        return c.json({ error: "The tiebreaker is only available at mutual match point or through Caramel" }, 409)
+      }
+      if (!isTiebreaker && tiebreakerReady) {
+        return c.json({ error: "Both players are at match point; the tiebreaker must be played" }, 409)
+      }
+    }
     if (action === "ban" && existingStatus === "protected") {
       return c.json({ error: `${slot} is protected and cannot be banned` }, 409)
     }
     if (action === "ban" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
       return c.json({ error: `${slot} is not available to ban` }, 409)
     }
-    if (action === "pick" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
+    if (action === "pick" && ["banned", "picked", "in-progress"].includes(existingStatus)) {
       return c.json({ error: `${slot} is not available to pick` }, 409)
     }
     if (action === "protect" && existingStatus !== "available") {
@@ -4127,7 +4309,20 @@ app.post("/api/match/:matchId/action", async (c) => {
       }
     }
 
-    if (existingRowIdx >= 0) {
+    let unpickedTotals: { scoreA: number; scoreB: number } | undefined
+    if (action === "unpick" && existingStatus === "completed") {
+      const completedWinner = existingRow?.[winnerIdx]?.trim() ?? ""
+      unpickedTotals = {
+        scoreA: Math.max(0, currentScoreA - (samePlayer(completedWinner, match.playerA) ? 1 : 0)),
+        scoreB: Math.max(0, currentScoreB - (samePlayer(completedWinner, match.playerB) ? 1 : 0)),
+      }
+      await updateMatchFields(c.env, matchId, {
+        score_a: String(unpickedTotals.scoreA),
+        score_b: String(unpickedTotals.scoreB),
+      })
+    }
+
+    if (existingRowIdx >= 0 && !repickingCompleted) {
       const sheetRow = existingRowIdx + 2
       const writes: Promise<void>[] = []
       if (action === "unpick") {
@@ -4175,10 +4370,13 @@ app.post("/api/match/:matchId/action", async (c) => {
           resolved_at: now,
           resolution: JSON.stringify({ extraBanAfter: slot }),
         })
+        const returnsToCraft = extraBan.payload.postBanCraft === true
         nextFlowState = await writeMatchFlowState(c.env, {
           ...flowState,
-          phase: "ban",
-          turnPlayer: actionPlayer,
+          phase: returnsToCraft ? "craft" : "ban",
+          turnPlayer: returnsToCraft
+            ? String(extraBan.payload.resumePicker ?? flowState.firstPicker ?? actionPlayer)
+            : actionPlayer,
           currentSlot: undefined,
         })
       }
@@ -4222,6 +4420,7 @@ app.post("/api/match/:matchId/action", async (c) => {
         phase: "craft",
         turnPlayer: beforePickedBy ?? flowState.turnPlayer,
         currentSlot: undefined,
+        scoreOverridden: true,
       })
     }
 
@@ -4236,7 +4435,7 @@ app.post("/api/match/:matchId/action", async (c) => {
       JSON.stringify(afterState),
     ).catch(() => {})
 
-    return c.json({ ok: true, slot, action, player, status, state: nextFlowState, manualOrder })
+    return c.json({ ok: true, slot, action, player, status, state: nextFlowState, totals: unpickedTotals, manualOrder })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Action failed" }, 500)
   }

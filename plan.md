@@ -178,20 +178,22 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `POST /api/match/:id/forfeit` — sets status=forfeit, winner, score=-1 in matches sheet.
 
 ### Match Flow Engine
-- [x] Actual phase order modeled in `match_state`: lobby → roll → order choice → home mods → bans → craft/pick → play → score/ingredients → repeat → ready result → completed.
+- [x] Actual phase order modeled in `match_state`: lobby → roll → order choice → home mods → bans → craft recipes → pick → play → score/ingredients → repeat → ready result → completed.
 - [x] `GET /api/match/:id/state` returns persisted flow state with sane default.
 - [x] `POST /api/match/:id/state` stores rolls, order choice, and home mod choices.
 - [x] `POST /api/match/:id/action` enforces ban/pick phase + expected player before writing map actions.
 - [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column.
 - [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
-- [x] Picking opens a post-pick recipe window; `POST /api/match/:id/setup-map` binds both players' recipes and advances to play.
-- [x] `POST /api/match/:id/score` atomically writes map scores, inventories, recipe resolutions, and flow state; retries are idempotent.
+- [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
+- [x] `POST /api/match/:id/score` atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
+- [x] BanchoBot finish messages auto-fill score entry; refs can persist absolute star corrections with `POST /api/match/:id/match-score`.
+- [x] Completed map slots can be repicked as additional history rows; TB is restricted to mutual match point unless Caramel unlocks the wildcard.
 - [x] Home-mod pools award one bonus ingredient to their owner on either a win or loss.
 - [x] `POST /api/match/:id/reset` clears match state while preserving the lobby; completed maps can be unpicked with reward reversal.
 - [x] `POST /api/match/:id/post-result` writes final `matches` result and completes flow state.
 - [x] `PUT /api/match/:id/inventory` persists manual inventory edits.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
-- [x] All 24 recipe definitions match the reference recipe book names and ingredient costs.
+- [x] All 24 recipe definitions match the reference costs/effects; duplicate Cinnamon Roll labels are distinguished by action.
 - [x] Recipe effects modify map commands, lobby mods, score resolution, replay flow, inventory rewards, bans, and protection.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.
 
@@ -216,26 +218,24 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 
 ## What Is Pending
 
-### 🔴 Auto Score Detection
+### Auto Score Detection
 
-BanchoBot sends per-player finish messages after each game. Nothing acts on them yet.
+BanchoBot finish messages now auto-fill both score fields. The ref can edit the detected values and submit once both
+players are present. Direct osu! APIv2 result polling remains optional future work.
 
 Format from real matches: `PlayerA finished playing (Score: 987,432, PASSED).`
 
 Flow:
-1. `parseBanchoEvent` or a new `parseScoreEvent` in MatchPanel detects the pattern.
-2. After both players' messages received → trigger `GET /api/match/:id/mp-result`.
-3. Server calls osu! APIv2 `GET /api/v2/matches/{mp_numeric_id}`, reads latest game scores.
-4. Cross-references player names to assign sides, determines winner.
-5. `POST /api/match/:id/score` writes to `match_maps` row + `audit_log`.
-6. Client updates mappool + scores.
-7. Auto-sends IRC result announcement and `!mp timer` for next pick.
+1. `parseFinishedScoreAnnouncement` detects each BanchoBot score and assigns it to the correct player.
+2. Match Control auto-fills both fields without auto-submitting, preserving the ref correction step.
+3. `POST /api/match/:id/score` settles `match_maps`, canonical match stars, recipes, and inventories.
+4. Client updates the mappool, stars, recipe state, and ingredients, then announces all of them in IRC.
 
 Endpoints needed:
 - `GET /api/match/:id/mp-result` — osu! API fetch, score resolution, return `{ scoreA, scoreB, winner, mapId }`.
-- `POST /api/match/:id/score` — writes resolved scores to `match_maps`.
+- `POST /api/match/:id/score` — implemented and authoritative.
 
-Manual fallback: score entry form (two number inputs + winner picker) in the map action modal or a dedicated panel — for when API data is wrong or missing.
+Manual fallback is the same score-entry form; refs can overwrite either detected value before submission.
 
 ### 🟡 IRC Timer Bar
 
@@ -269,7 +269,7 @@ Manual fallback: score entry form (two number inputs + winner picker) in the map
 
 | # | Item | Reason |
 |---|------|--------|
-| 1 | **Auto score detection** | Biggest remaining live-referee time saver; IRC event parsing already exists. |
+| 1 | **osu! API result polling** | Optional verification path beyond the implemented BanchoBot score auto-fill. |
 | 2 | **IRC timer completion** | Add abort handling and synchronize timers started outside the portal. |
 | 3 | **Concurrent write guard** | Prevent stale writes when multiple referees operate the same match. |
 | 4 | **Production hardening** | Remove or further gate diagnostics before the tournament. |
@@ -302,6 +302,7 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | PUT | `/api/match/:id/inventory` | Done |
 | GET | `/api/match/:id/state` | Done |
 | POST | `/api/match/:id/state` | Done |
+| POST | `/api/match/:id/match-score` | Done |
 | POST | `/api/match/:id/action` | Done |
 | POST | `/api/match/:id/setup-map` | Done |
 | POST | `/api/match/:id/score` | Done, recipe-aware |

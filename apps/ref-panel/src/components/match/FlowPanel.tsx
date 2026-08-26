@@ -22,6 +22,8 @@ interface Props {
   onSetupMap: (map: PoolMap) => void
   setupSubmitting?: boolean
   scoreSubmitting?: boolean
+  detectedScores?: { a?: number; b?: number; run: number }
+  accuracyMode?: boolean
   onSubmitScore: (slot: string, scoreA: number, scoreB: number) => void
 }
 
@@ -59,6 +61,8 @@ export function FlowPanel({
   onSetupMap,
   setupSubmitting = false,
   scoreSubmitting = false,
+  detectedScores,
+  accuracyMode = false,
   onSubmitScore,
 }: Props) {
   const currentMap = !mappool
@@ -66,8 +70,8 @@ export function FlowPanel({
     : state?.currentSlot
       ? mappool.find((map) => map.slot === state.currentSlot) ?? null
       : mappool.find((map) => map.status === "picked") ?? null
-  const currentSlotKey = currentMap?.slot ?? ""
-  const [scoreEntry, setScoreEntry] = useState({ slot: "", a: "", b: "" })
+  const currentSlotKey = currentMap ? `${currentMap.slot}:${detectedScores?.run ?? 0}` : ""
+  const [scoreEntry, setScoreEntry] = useState<{ slot: string; a?: string; b?: string }>({ slot: "" })
   const [rollEntry, setRollEntry] = useState<{ a?: string; b?: string }>({})
 
   if (!state) {
@@ -83,11 +87,18 @@ export function FlowPanel({
   const canSaveRolls = validRollA && validRollB
   const rollWinner = canSaveRolls && rollA !== rollB ? (rollA > rollB ? playerA : playerB) : state.rollWinner
   const winsNeeded = Math.ceil(bestOf / 2)
-  const scoreInputA = scoreEntry.slot === currentSlotKey ? scoreEntry.a : ""
-  const scoreInputB = scoreEntry.slot === currentSlotKey ? scoreEntry.b : ""
+  const scoreInputA = scoreEntry.slot === currentSlotKey && scoreEntry.a !== undefined
+    ? scoreEntry.a
+    : detectedScores?.a?.toString() ?? ""
+  const scoreInputB = scoreEntry.slot === currentSlotKey && scoreEntry.b !== undefined
+    ? scoreEntry.b
+    : detectedScores?.b?.toString() ?? ""
   const parsedScoreA = parseScoreValue(scoreInputA)
   const parsedScoreB = parseScoreValue(scoreInputB)
-  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && parsedScoreA !== parsedScoreB
+  const scoresWithinRange = !accuracyMode || (
+    parsedScoreA !== null && parsedScoreB !== null && parsedScoreA <= 100 && parsedScoreB <= 100
+  )
+  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange
 
   return (
     <div className="space-y-4">
@@ -100,8 +111,8 @@ export function FlowPanel({
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           {state.phase === "ban" && state.turnPlayer ? `${state.turnPlayer} bans next.` : null}
-          {state.phase === "craft" && currentMap ? `${currentMap.slot} is picked. Select recipes, then set up the map.` : null}
-          {state.phase === "craft" && !currentMap && state.turnPlayer ? `${state.turnPlayer} picks a map.` : null}
+          {state.phase === "craft" && currentMap ? `${currentMap.slot} is picked. Set up the map when ready.` : null}
+          {state.phase === "craft" && !currentMap && state.turnPlayer ? `Craft recipes, then ${state.turnPlayer} picks a map.` : null}
           {state.phase === "play" && currentMap ? `${currentMap.slot} is in play. Record the score after both players finish.` : null}
           {state.phase === "ready_result" ? "Match point target reached. Post the result from the left panel." : null}
           {state.phase === "completed" ? "Final result has been posted." : null}
@@ -202,7 +213,7 @@ export function FlowPanel({
           <Separator />
           <p className="text-xs text-muted-foreground">
             {state.phase === "craft" && currentMap
-              ? "Before-map and pick-phase recipes are open. Set up the map when both players are ready."
+              ? "Crafting is closed for this pick. Set up the map when both players are ready."
               : manualMapActions
               ? "Select an available map in the pool table. Any player can pick, ban, or protect."
               : "Select an available map in the pool table. Only the expected player/action is enabled."}
@@ -228,8 +239,8 @@ export function FlowPanel({
               <Input
                 value={scoreInputA}
                 onChange={(event) => setScoreEntry({ slot: currentSlotKey, a: event.target.value, b: scoreInputB })}
-                inputMode="numeric"
-                placeholder="987432"
+                inputMode={accuracyMode ? "decimal" : "numeric"}
+                placeholder={accuracyMode ? "98.76%" : "987432"}
               />
             </label>
             <label className="space-y-1">
@@ -237,11 +248,14 @@ export function FlowPanel({
               <Input
                 value={scoreInputB}
                 onChange={(event) => setScoreEntry({ slot: currentSlotKey, a: scoreInputA, b: event.target.value })}
-                inputMode="numeric"
-                placeholder="854201"
+                inputMode={accuracyMode ? "decimal" : "numeric"}
+                placeholder={accuracyMode ? "97.54%" : "854201"}
               />
             </label>
           </div>
+          {accuracyMode && !scoresWithinRange && (
+            <p className="text-xs text-destructive">Accuracy must be between 0% and 100%.</p>
+          )}
           <Button
             size="sm"
             className="w-full text-xs"
