@@ -10,7 +10,7 @@ export const GENERAL_INFO: RuleItem[] = [
     ),
     children: [
       <>
-        BWS Rank <Highlight>#1,000 - #10,000</Highlight>
+        BWS Rank <Highlight>#900 - #10,500</Highlight>
       </>,
     ],
   },

@@ -19,8 +19,10 @@ declare global {
     RANGE_STAFF?: string
     RANGE_PLAYERS?: string
     RANGE_MATCHES?: string
-    // JSON: { "Round of 32": "R32!A2:Z", "Round of 16": "R16!A2:Z", ... }
-    MAPPOOL_STAGES?: string
+    // Override for the pooling sheet's stage registry (default: Settings!A1:U60).
+    // The stage LIST itself is read from that tab, not from env — a pool goes
+    // public by ticking "Publish Pool" in the sheet.
+    RANGE_MAPPOOL_SETTINGS?: string
 
     // osu! API v2 (client credentials) for live rank enrichment
     OSU_CLIENT_ID?: string

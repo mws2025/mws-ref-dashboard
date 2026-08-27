@@ -2,8 +2,8 @@ export const navigationLinks = [
   { href: "/about", label: "About" },
   { href: "/staff", label: "Staff" },
   { href: "/players", label: "Players" },
+  { href: "/mappools", label: "Mappool" },
   // { href: "/menu", label: "Menu" },
-  // { href: "/mappool", label: "Mappool" },
   // { href: "/schedule", label: "Schedule" },
 ]
 

@@ -14,10 +14,13 @@ const TEAM_MAPPINGS: Record<string, string[]> = {
   Design: [
     "Illustrator",
     "GFX Artist",
+    "VFX Artist",
     "Videography",
     "Lead Designer",
     "Skinner",
     "Storyboarder",
+    "Hitsounder",
+    "Hitsounds",
   ],
   Development: ["Web Developer", "Sheeter"],
   "Poolers & Mappers": ["Mapper", "Pooler", "Quality Assurance"],
@@ -88,16 +91,7 @@ export default async function StaffMembers() {
             />
           ) : (
             <>
-              <div className="mb-4 text-center">
-                Last Updated:{" "}
-                {new Date().toLocaleDateString("en-US", {
-                  year: "numeric",
-                  month: "long",
-                  day: "numeric",
-                })}
-              </div>
-
-              <div className="flex flex-col gap-8">
+              <div className="mt-4 flex flex-col gap-8">
                 {teams.map(({ team, members }) => (
                   <div key={team}>
                     <Heading as="h2" size="section" className="mb-2">
@@ -105,7 +99,7 @@ export default async function StaffMembers() {
                     </Heading>
                     <div className="flex w-full flex-wrap gap-4">
                       {members.map((member) => (
-                        <MemberCard key={member.id} {...member} />
+                        <MemberCard key={member.discord || member.id} {...member} />
                       ))}
                     </div>
                   </div>

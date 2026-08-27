@@ -15,6 +15,26 @@ const nextConfig: NextConfig = {
         pathname: "/**",
       },
       {
+        // guest/placeholder avatar for staff with no linked osu! account
+        protocol: "https",
+        hostname: "osu.ppy.sh",
+        port: "",
+        pathname: "/images/**",
+      },
+      {
+        // beatmap cover art
+        protocol: "https",
+        hostname: "assets.ppy.sh",
+        port: "",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "b.ppy.sh",
+        port: "",
+        pathname: "/**",
+      },
+      {
         protocol: "https",
         hostname: "flagcdn.com",
         port: "",
