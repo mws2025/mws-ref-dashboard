@@ -84,7 +84,7 @@ export function parseScoreValue(value: string | number): number | null {
 }
 
 export function formatLobbyTitle(abbreviation: string, playerA: string, playerB: string): string {
-  return `${abbreviation.trim() || "MWS"}: [${playerA.trim()}] vs [${playerB.trim()}]`
+  return `${abbreviation.trim() || "MWS"}: (${playerA.trim()}) vs (${playerB.trim()})`
 }
 
 export function lobbyInviteTarget(username: string, osuId?: string): string {

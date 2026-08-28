@@ -84,7 +84,7 @@ describe("referee input and lobby formatting", () => {
   })
 
   test("formats lobby names and invite targets", () => {
-    expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: [Player A] vs [Player B]")
+    expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: (Player A) vs (Player B)")
     expect(lobbyInviteTarget("WEARY", "12345")).toBe("#12345")
     expect(lobbyInviteTarget("Cinnamon Twist")).toBe("Cinnamon_Twist")
   })
