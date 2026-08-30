@@ -355,7 +355,8 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
 `manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
-portal. Recipes are crafted during `craft` before a map is selected. After the pick, call
+portal. Recipes are crafted during `craft` before a map is selected. A match can have at most four active bans,
+including bans granted by Beignets. After the pick, call
 `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }`. Completed slots may be picked again; each replay is
 stored as another `match_maps` row. TB is rejected until both players are one point from victory, except when an active
 Caramel unlocks it as the wildcard slot. Use `action: "unpick"` to clear the latest picked or completed row and reverse
@@ -403,10 +404,12 @@ the selected effect requires them:
 - `ingredient` is used by Omelette and Dough.
 - `rewardIngredients` must contain exactly two ingredients for Caramel.
 
-Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. Caramel
-persists a randomly selected configured beatmap in its event payload and overrides the wildcard setup command with that
-beatmap. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes are listed
-alphabetically.
+Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. An active
+Caramel locks both players out of further crafting. Crafting Caramel after another pending recipe refunds and reverts
+that recipe before Caramel is charged. Caramel persists a randomly selected configured beatmap in its event payload and
+overrides the wildcard setup command with that beatmap. Magic Cake copies the opponent's latest `resolved` recipe, not
+an active or reverted event. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes
+are listed alphabetically.
 
 Other mutation bodies:
 

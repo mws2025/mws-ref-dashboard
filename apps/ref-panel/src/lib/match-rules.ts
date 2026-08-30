@@ -8,6 +8,12 @@ export type FinishedScoreAnnouncement = {
   score: number
 }
 
+export const MAX_MATCH_BANS = 4
+
+export function isBanLimitReached(currentBans: number): boolean {
+  return currentBans >= MAX_MATCH_BANS
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null

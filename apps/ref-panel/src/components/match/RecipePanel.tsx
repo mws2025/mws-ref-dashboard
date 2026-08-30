@@ -12,6 +12,7 @@ import { Separator } from "@/components/ui/separator"
 import { INGREDIENTS } from "@/data/constants"
 import { RECIPES, RECIPES_ALPHABETICAL } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
+import { isBanLimitReached } from "@/lib/match-rules"
 import type {
   IngKey,
   Inventory,
@@ -77,6 +78,7 @@ function RecipeList({
   label,
   phase,
   hasPickedMap,
+  banLimitReached,
   craftingDisabled,
   onActivate,
 }: {
@@ -84,10 +86,15 @@ function RecipeList({
   label: string
   phase?: MatchFlowPhase
   hasPickedMap: boolean
+  banLimitReached: boolean
   craftingDisabled: boolean
   onActivate: (player: string, recipe: Recipe) => void
 }) {
-  const affordableCount = RECIPES_ALPHABETICAL.filter((recipe) => canAfford(recipe, inventory)).length
+  const affordableCount = craftingDisabled
+    ? 0
+    : RECIPES_ALPHABETICAL.filter((recipe) =>
+        canAfford(recipe, inventory) && !(banLimitReached && recipe.effectType === "extra_ban")
+      ).length
 
   return (
     <div className="space-y-3">
@@ -101,6 +108,7 @@ function RecipeList({
           {RECIPES_ALPHABETICAL.map((recipe) => {
             const affordable = canAfford(recipe, inventory)
             const timingOpen = isRecipeTimingOpen(phase, hasPickedMap, craftingDisabled)
+            const blockedByBanLimit = banLimitReached && recipe.effectType === "extra_ban"
             return (
             <div key={recipe.id} className={`rounded-md border border-border px-3 py-2 ${affordable ? "bg-secondary/10" : "opacity-50"}`}>
               <div className="flex items-start justify-between gap-2">
@@ -115,7 +123,7 @@ function RecipeList({
                   size="sm"
                   className="flex-shrink-0 text-xs"
                   variant="secondary"
-                  disabled={!affordable || !timingOpen}
+                  disabled={!affordable || !timingOpen || blockedByBanLimit}
                   onClick={() => onActivate(label, recipe)}
                 >
                   Use
@@ -216,7 +224,12 @@ export function RecipePanel({
   const usedB = recipeEvents.filter((event) => event.player.toLowerCase() === labelB.toLowerCase())
   const availableMaps = mappool.filter((map) => map.status === "available")
   const bannedMaps = mappool.filter((map) => map.status === "banned")
+  const banLimitReached = isBanLimitReached(bannedMaps.length)
   const hasPickedMap = mappool.some((map) => map.status === "picked")
+  const caramelActive = recipeEvents.some((event) =>
+    event.status === "active" && (event.recipeId === 21 || event.payload.copiedEffectType === "wildcard_slot")
+  )
+  const craftingLocked = craftingDisabled || caramelActive
 
   function openActivation(player: string, recipe: Recipe) {
     setPending({ player, recipe })
@@ -235,14 +248,19 @@ export function RecipePanel({
   return (
     <>
       <div className="space-y-6">
+        {caramelActive && (
+          <div className="rounded-md border border-amber-600/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            Caramel is active. Other recipes are locked until it resolves or is reverted.
+          </div>
+        )}
         <div className="space-y-3">
           <RecipeEvents entries={usedA} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} craftingDisabled={craftingDisabled} onActivate={openActivation} />
+          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
         </div>
         <Separator />
         <div className="space-y-3">
           <RecipeEvents entries={usedB} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} craftingDisabled={craftingDisabled} onActivate={openActivation} />
+          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
         </div>
       </div>
 

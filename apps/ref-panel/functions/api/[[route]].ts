@@ -7,9 +7,11 @@ import {
   formatLobbyMods,
   formatLobbyTitle,
   homeModIngredientAwards,
+  isBanLimitReached,
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
+  MAX_MATCH_BANS,
   nextPlayerAfterPick,
   parseScoreValue,
 } from "../../src/lib/match-rules"
@@ -1520,6 +1522,22 @@ function countCompletedWins(matchMaps: SheetRecord[], matchId: string, player: s
   ).length
 }
 
+function latestMatchMapRecords(matchMaps: SheetRecord[], matchId: string): Map<string, SheetRecord> {
+  const latest = new Map<string, SheetRecord>()
+  for (const record of matchMaps) {
+    if (firstValue(record, ["match_id"]) !== matchId) continue
+    const slot = firstValue(record, ["slot", "map_id"]).toLowerCase()
+    if (slot) latest.set(slot, record)
+  }
+  return latest
+}
+
+function countActiveBans(matchMaps: SheetRecord[], matchId: string): number {
+  return [...latestMatchMapRecords(matchMaps, matchId).values()].filter((record) =>
+    firstValue(record, ["status"]).toLowerCase() === "banned"
+  ).length
+}
+
 async function getMatchById(env: Bindings, matchId: string): Promise<ApiMatch | null> {
   const matches = await getMatches(env)
   return matches.find((match) => match.id === matchId) ?? null
@@ -1756,10 +1774,17 @@ async function setMatchMapStatus(
   if (matchIdIndex < 0 || slotIndex < 0 || statusIndex < 0) {
     throw new Error("match_maps sheet missing match_id, slot, or status")
   }
-  const rowIndex = rows.findIndex((row) =>
-    row[matchIdIndex]?.trim() === matchId &&
-    row[slotIndex]?.trim().toLowerCase() === slot.toLowerCase()
-  )
+  let rowIndex = -1
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (
+      row?.[matchIdIndex]?.trim() === matchId &&
+      row[slotIndex]?.trim().toLowerCase() === slot.toLowerCase()
+    ) {
+      rowIndex = index
+      break
+    }
+  }
   if (rowIndex >= 0) {
     const rowNumber = rowIndex + 2
     const writes = [
@@ -2227,14 +2252,11 @@ app.get("/api/match/:matchId/mappool", async (c) => {
       ? poolRecords.filter((r) => r["round"]?.trim().toLowerCase() === mappoolId.trim().toLowerCase())
       : poolRecords
 
-    const overrides = new Map<string, SheetRecord>()
-    matchMapRecords
-      .filter((r) => r["match_id"]?.trim() === matchId)
-      .forEach((r) => { overrides.set(r["slot"]?.trim() ?? "", r) })
+    const overrides = latestMatchMapRecords(matchMapRecords, matchId)
 
     const mappool: ApiPoolMap[] = roundMaps.map((r) => {
       const slot = r["map_id"]?.trim() ?? ""
-      const ov   = overrides.get(slot)
+      const ov   = overrides.get(slot.toLowerCase())
       const beatmapId = r["beatmap_id"]?.trim() || undefined
       return {
         slot,
@@ -3571,14 +3593,25 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     let effectPayload = itemPayload(item)
     let target = typeof body.targetSlot === "string" ? body.targetSlot.trim() : ""
     const activationPayload: Record<string, unknown> = {}
+    const activeCaramel = events.find((event) =>
+      event.status === "active" && effectTypeForEvent(itemRecords, event) === "wildcard_slot"
+    )
+    if (activeCaramel) {
+      return c.json({ error: "Caramel is active; no other recipe can be crafted for this pick" }, 409)
+    }
 
     if (baseEffectType === "copy_last_opponent") {
-      const sourceEvent = [...events].reverse().find((event) =>
-        event.status !== "reverted" &&
-        samePlayer(event.player, opponent) &&
-        event.itemId !== "item_18"
-      )
-      if (!sourceEvent) return c.json({ error: "Opponent has no recipe effect to copy" }, 409)
+      const sourceEvent = events
+        .filter((event) =>
+          event.status === "resolved" &&
+          samePlayer(event.player, opponent)
+        )
+        .sort((left, right) => {
+          const resolvedOrder = (left.resolvedAt || left.createdAt).localeCompare(right.resolvedAt || right.createdAt)
+          return resolvedOrder || left.createdAt.localeCompare(right.createdAt)
+        })
+        .at(-1)
+      if (!sourceEvent) return c.json({ error: "Opponent has no resolved recipe effect to copy" }, 409)
       const sourceItem = itemForEvent(itemRecords, sourceEvent)
       if (!sourceItem) return c.json({ error: "Opponent recipe definition is missing" }, 409)
       effectType = effectTypeForEvent(itemRecords, sourceEvent)
@@ -3590,6 +3623,10 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       activationPayload.copiedFromEventId = sourceEvent.id
       activationPayload.copiedFromItemId = sourceEvent.itemId
     }
+
+    const displacedByCaramel = effectType === "wildcard_slot"
+      ? events.filter((event) => event.status === "active")
+      : []
 
     const mod = typeof body.mod === "string"
       ? body.mod.trim().toUpperCase()
@@ -3622,6 +3659,9 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       activationPayload.ingredient = ingredient
     }
     if (effectType === "extra_ban") {
+      if (isBanLimitReached(countActiveBans(matchMapRecords, matchId))) {
+        return c.json({ error: `A match cannot have more than ${MAX_MATCH_BANS} bans` }, 409)
+      }
       activationPayload.postBanCraft = true
       activationPayload.resumePicker = flowState.turnPlayer ?? flowState.firstPicker ?? player
     }
@@ -3631,11 +3671,9 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       ? poolRecords.filter((record) => firstValue(record, ["round"]).toLowerCase() === match.mappool?.toLowerCase())
       : poolRecords
     const validSlots = new Set(matchPoolRecords.map((record) => firstValue(record, ["map_id", "slot"]).toLowerCase()))
+    const latestMapRecords = latestMatchMapRecords(matchMapRecords, matchId)
     const mapStatus = (slot: string): string => {
-      const record = matchMapRecords.find((candidate) =>
-        firstValue(candidate, ["match_id"]) === matchId &&
-        firstValue(candidate, ["slot", "map_id"]).toLowerCase() === slot.toLowerCase()
-      )
+      const record = latestMapRecords.get(slot.toLowerCase())
       return firstValue(record ?? {}, ["status"]).toLowerCase() || "available"
     }
 
@@ -3695,10 +3733,17 @@ app.post("/api/match/:matchId/recipe", async (c) => {
 
     const cost = recipeCost(item)
     const inventoryRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "inventory!A1:Z"))
-    const current = parseInventoryRecord(inventoryRecords.find((record) =>
+    let current = parseInventoryRecord(inventoryRecords.find((record) =>
       firstValue(record, ["match_id"]) === matchId &&
       samePlayer(firstValue(record, ["player", "player_id"]), player)
     ))
+    for (const displaced of displacedByCaramel) {
+      if (!samePlayer(displaced.player, player)) continue
+      const displacedItem = itemForEvent(itemRecords, displaced)
+      if (!displacedItem) continue
+      const refund = recipeCost(displacedItem)
+      for (const key of INVENTORY_KEYS) current[key] += refund[key]
+    }
     const missing = INVENTORY_KEYS.filter((key) => current[key] < cost[key])
     if (missing.length > 0) return c.json({ error: "Not enough ingredients", missing }, 409)
 
@@ -3712,11 +3757,51 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       }
     }
 
+    const now = new Date().toISOString()
+    for (const displaced of displacedByCaramel) {
+      const displacedItem = itemForEvent(itemRecords, displaced)
+      if (!displacedItem) throw new Error(`Recipe definition missing for ${displaced.itemId}`)
+      const refund = recipeCost(displacedItem)
+      await applyInventoryDelta(
+        c.env,
+        matchId,
+        displaced.player,
+        refund,
+        sessionUser?.username ?? "unknown",
+        "caramel_recipe_refund",
+      )
+      await updateRecipeEvent(c.env, displaced.id, {
+        status: "reverted",
+        reverted_at: now,
+        resolved_at: now,
+        resolution: JSON.stringify({
+          ...displaced.resolution,
+          displacedByCaramel: true,
+          refunded: refund,
+        }),
+      })
+      await appendAuditLog(
+        c.env,
+        sessionUser?.username ?? "unknown",
+        "caramel_recipe_refund",
+        "item_event",
+        displaced.id,
+        JSON.stringify(publicRecipeEvent(displaced)),
+        JSON.stringify({ status: "reverted", refunded: refund }),
+      ).catch(() => {})
+    }
+
+    if (displacedByCaramel.some((event) => samePlayer(event.player, player))) {
+      const refreshedInventories = sheetRowsToRecords(await getSheetValues(c.env, "inventory!A1:Z"))
+      current = parseInventoryRecord(refreshedInventories.find((record) =>
+        firstValue(record, ["match_id"]) === matchId &&
+        samePlayer(firstValue(record, ["player", "player_id"]), player)
+      ))
+    }
     const next = { ...current }
     for (const key of INVENTORY_KEYS) next[key] -= cost[key]
     let inventory = await writeInventoryAbsolute(c.env, matchId, player, next, sessionUser?.username ?? "unknown", "recipe_cost")
     const eventId = randomHex(8)
-    const now = new Date().toISOString()
     const immediate = ["none", "protect_map", "unban_map", "steal_ingredient"].includes(effectType)
     const payload = { ...effectPayload, ...activationPayload }
     const resolution: Record<string, unknown> = {}
@@ -4621,6 +4706,7 @@ app.post("/api/match/:matchId/action", async (c) => {
     const existingStatus = existingRow?.[statusIdx]?.trim().toLowerCase() || "available"
     const repickingCompleted = action === "pick" && existingStatus === "completed"
     const matchMapRecords = sheetRowsToRecords(matchMapsValues)
+    const activeBanCount = countActiveBans(matchMapRecords, matchId)
     const countedScoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
     const countedScoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
     const currentScoreA = flowState.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedScoreA)
@@ -4649,6 +4735,9 @@ app.post("/api/match/:matchId/action", async (c) => {
     }
     if (action === "ban" && existingStatus === "protected") {
       return c.json({ error: `${slot} is protected and cannot be banned` }, 409)
+    }
+    if (action === "ban" && isBanLimitReached(activeBanCount)) {
+      return c.json({ error: `A match cannot have more than ${MAX_MATCH_BANS} bans` }, 409)
     }
     if (action === "ban" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
       return c.json({ error: `${slot} is not available to ban` }, 409)
@@ -4796,17 +4885,17 @@ app.post("/api/match/:matchId/action", async (c) => {
           currentSlot: undefined,
         })
       }
-      const mapRecords = sheetRowsToRecords(matchMapsValues)
-      const completedBans = mapRecords.filter((r) =>
-        firstValue(r, ["match_id"]) === matchId &&
-        firstValue(r, ["status"]).toLowerCase() === "banned"
-      ).length + 1
+      const completedBans = activeBanCount + 1
       const firstBanner = flowState.firstBanner ?? actionPlayer
       const secondBanner = opponentOf(firstBanner, match.playerA, match.playerB)
-      const banOrder = orderedPlayersFromPattern(actionCfgMap.get("ban order") ?? DEFAULT_BAN_ORDER, firstBanner, secondBanner)
+      const banOrder = orderedPlayersFromPattern(
+        actionCfgMap.get("ban order") ?? DEFAULT_BAN_ORDER,
+        firstBanner,
+        secondBanner,
+      ).slice(0, MAX_MATCH_BANS)
       if (extraBan) {
         // Beignets grants the acting player one immediate additional ban.
-      } else if (completedBans < banOrder.length) {
+      } else if (completedBans < Math.min(banOrder.length, MAX_MATCH_BANS)) {
         nextFlowState = await writeMatchFlowState(c.env, {
           ...flowState,
           phase: "ban",

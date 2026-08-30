@@ -4,6 +4,7 @@ import {
   addLobbyMod,
   formatLobbyTitle,
   homeModIngredientAwards,
+  isBanLimitReached,
   isTiebreakerReady,
   lobbyInviteTarget,
   lobbyModsForPool,
@@ -56,6 +57,12 @@ describe("match progression", () => {
     expect(isTiebreakerReady(4, 4, 9)).toBe(true)
     expect(isTiebreakerReady(4, 3, 9)).toBe(false)
     expect(isTiebreakerReady(5, 5, 9)).toBe(false)
+  })
+
+  test("enforces the four-ban match limit", () => {
+    expect(isBanLimitReached(3)).toBe(false)
+    expect(isBanLimitReached(4)).toBe(true)
+    expect(isBanLimitReached(5)).toBe(true)
   })
 
   test("awards one home ingredient on a loss and two on a win", () => {

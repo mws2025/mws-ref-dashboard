@@ -8,8 +8,10 @@ import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import {
   formatLobbyTitle,
+  isBanLimitReached,
   isTiebreakerReady,
   lobbyModsForPool,
+  MAX_MATCH_BANS,
   parseFinishedScoreAnnouncement,
   parseRollAnnouncement,
 } from "@/lib/match-rules"
@@ -375,7 +377,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     if (action === "ban") {
       const firstBanner = flowState.firstBanner ?? player
       const secondBanner = opponentOf(firstBanner, match.playerA, match.playerB)
-      const order = orderedPlayersFromPattern(banOrder, firstBanner, secondBanner)
+      const order = orderedPlayersFromPattern(banOrder, firstBanner, secondBanner).slice(0, MAX_MATCH_BANS)
       const completedBans = (liveMappool?.filter((map) => map.status === "banned").length ?? 0) + 1
       setFlowState({
         ...flowState,
@@ -739,6 +741,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   }
 
   const tiebreakerReady = isTiebreakerReady(liveScoreA, liveScoreB, match.bestOf ?? 9)
+  const activeBanCount = liveMappool?.filter((map) => map.status === "banned").length ?? 0
+  const banLimitReached = isBanLimitReached(activeBanCount)
   const activeSlot = flowState?.currentSlot
   const accuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
     event.status === "active" &&
@@ -1052,8 +1056,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             : flowState?.currentSlot
               ? []
             : manualMapActions
-              ? undefined
-              : flowState?.phase === "ban"
+              ? banLimitReached ? ["pick", "protect"] : undefined
+              : flowState?.phase === "ban" && !banLimitReached
               ? ["ban"]
               : flowState?.phase === "craft"
                 ? ["pick"]
@@ -1075,6 +1079,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 : "Both players are at match point. Play the tiebreaker."
             : flowState?.currentSlot
               ? `Finish or unpick ${flowState.currentSlot} before choosing another map.`
+            : banLimitReached && flowState?.phase === "ban"
+              ? `The ${MAX_MATCH_BANS}-ban maximum has been reached.`
             : manualMapActions
               ? "Manual order is on. Either player can pick, ban, or protect."
               : flowState?.phase === "ban" && flowState.turnPlayer

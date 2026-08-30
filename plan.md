@@ -184,6 +184,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `POST /api/match/:id/action` enforces ban/pick phase + expected player before writing map actions.
 - [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column.
 - [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
+- [x] Ban state uses the latest row per slot and enforces an absolute four-ban maximum, including Beignets and manual actions.
 - [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
 - [x] `POST /api/match/:id/score` atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
 - [x] BanchoBot finish messages auto-fill score entry; refs can persist absolute star corrections with `POST /api/match/:id/match-score`.
@@ -195,6 +196,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
 - [x] All 24 recipe definitions match the reference costs/effects; duplicate Cinnamon Roll labels are distinguished by action.
 - [x] Recipe effects modify map commands, lobby mods, score resolution, replay flow, inventory rewards, bans, and protection.
+- [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.
 
 ### Test Mode
