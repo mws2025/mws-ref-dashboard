@@ -1,6 +1,16 @@
 import { useEffect, useState } from "react"
 import { format, isValid, parseISO } from "date-fns"
-import { CalendarDays, Radio, CalendarOff, RefreshCw, UserMinus, UserPlus } from "lucide-react"
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CalendarDays,
+  Radio,
+  CalendarOff,
+  RefreshCw,
+  UserMinus,
+  UserPlus,
+} from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -52,13 +62,16 @@ type MatchesResponse = {
   updatedAt: string
 }
 
-const SCHEDULE_COLUMNS = [
-  { label: "Round", className: "w-24" },
-  { label: "Match ID", className: "w-24" },
-  { label: "Match", className: "w-64" },
-  { label: "Date", className: "w-32" },
-  { label: "Time", className: "w-20" },
-  { label: "Referee", className: "w-40" },
+type ScheduleSortKey = "round" | "id" | "match" | "date" | "time" | "referee"
+type SortDirection = "asc" | "desc"
+
+const SCHEDULE_COLUMNS: readonly { label: string; className: string; sortKey?: ScheduleSortKey }[] = [
+  { label: "Round", className: "w-24", sortKey: "round" },
+  { label: "Match ID", className: "w-24", sortKey: "id" },
+  { label: "Match", className: "w-64", sortKey: "match" },
+  { label: "Date", className: "w-32", sortKey: "date" },
+  { label: "Time", className: "w-20", sortKey: "time" },
+  { label: "Referee", className: "w-40", sortKey: "referee" },
   { label: "Status", className: "w-28" },
   { label: "Action", className: "w-[244px] text-right" },
 ] as const
@@ -89,6 +102,21 @@ function canOpenMatch(match: Match): boolean {
 
 function compareMatchSchedule(left: Match, right: Match): number {
   return left.date.localeCompare(right.date) || left.time.localeCompare(right.time) || left.round.localeCompare(right.round)
+}
+
+function scheduleSortValue(match: Match, key: ScheduleSortKey): string {
+  switch (key) {
+    case "round": return match.round
+    case "id": return match.id
+    case "match": return `${match.playerA} vs ${match.playerB}`
+    case "date": return match.date
+    case "time": return match.time
+    case "referee": return match.referee ?? ""
+  }
+}
+
+function compareNatural(left: string, right: string): number {
+  return left.localeCompare(right, "en", { numeric: true, sensitivity: "base" })
 }
 
 function parseMatchDate(raw: string): Date | undefined {
@@ -155,6 +183,10 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
   const [scheduleTime, setScheduleTime] = useState("")
   const [scheduleSaving, setScheduleSaving] = useState(false)
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [scheduleSort, setScheduleSort] = useState<{ key: ScheduleSortKey; direction: SortDirection }>({
+    key: "id",
+    direction: "asc",
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -190,6 +222,20 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
   const yourMatches = matchesResponse?.yourMatches ?? []
   const activeMatches = matchesResponse?.activeMatches ?? []
   const scheduleMatches = matchesResponse?.matches ?? []
+  const sortedScheduleMatches = [...scheduleMatches].sort((left, right) => {
+    const order = compareNatural(
+      scheduleSortValue(left, scheduleSort.key),
+      scheduleSortValue(right, scheduleSort.key),
+    )
+    return (scheduleSort.direction === "asc" ? order : -order) || compareNatural(left.id, right.id)
+  })
+
+  function toggleScheduleSort(key: ScheduleSortKey) {
+    setScheduleSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }))
+  }
 
   async function updateRefereeAssignment(match: Match, action: "signup" | "signout") {
     if (assignmentPending) return
@@ -421,8 +467,29 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                 <TableHeader>
                   <TableRow className="bg-card/60 hover:bg-card/60">
                     {SCHEDULE_COLUMNS.map((column) => (
-                      <TableHead key={column.label} className={`font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground ${column.className}`}>
-                        {column.label}
+                      <TableHead
+                        key={column.label}
+                        className={`font-heading text-xs uppercase tracking-normal text-muted-foreground ${column.className}`}
+                        aria-sort={column.sortKey && scheduleSort.key === column.sortKey
+                          ? scheduleSort.direction === "asc" ? "ascending" : "descending"
+                          : undefined}
+                      >
+                        {column.sortKey ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            className="-ml-2 px-2 font-heading text-xs uppercase tracking-normal text-muted-foreground"
+                            onClick={() => toggleScheduleSort(column.sortKey as ScheduleSortKey)}
+                          >
+                            {column.label}
+                            {scheduleSort.key !== column.sortKey
+                              ? <ArrowUpDown className="h-3.5 w-3.5" />
+                              : scheduleSort.direction === "asc"
+                                ? <ArrowUp className="h-3.5 w-3.5" />
+                                : <ArrowDown className="h-3.5 w-3.5" />}
+                          </Button>
+                        ) : column.label}
                       </TableHead>
                     ))}
                   </TableRow>
@@ -430,8 +497,8 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                 <TableBody>
                   {!matchesResponse ? (
                     <SkeletonTableRows />
-                  ) : scheduleMatches.length > 0 ? (
-                    scheduleMatches.map((m) => (
+                  ) : sortedScheduleMatches.length > 0 ? (
+                    sortedScheduleMatches.map((m) => (
                       <TableRow key={m.id}>
                         <TableCell className="text-muted-foreground">{m.round}</TableCell>
                         <TableCell className="font-mono text-xs">{m.id}</TableCell>
