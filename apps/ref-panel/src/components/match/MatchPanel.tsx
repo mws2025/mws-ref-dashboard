@@ -690,12 +690,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     const res = await fetch(`/api/match/${match.id}/create-lobby`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        playerA: match.playerA,
-        playerB: match.playerB,
-        refUsername: match.referee ?? "",
-      }),
     })
     if (!res.ok) {
       console.error("create-lobby failed", await res.text())

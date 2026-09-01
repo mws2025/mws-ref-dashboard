@@ -140,9 +140,11 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 ### Dashboard
 - [x] `GET /api/matches` reads `matches!A1:Z` + `players!A1:Z`.
 - [x] "Your matches", active matches, tournament schedule backed by Sheets.
+- [x] Referees can sign up for unassigned matches or withdraw their own assignment; existing assignments cannot be taken over.
+- [x] Any authenticated referee can open an unfinished match for emergency coverage without changing its assignment.
 - [x] shadcn `Table` + `ScrollArea` for schedule section.
 - [x] `LiveBadge` component with `animate-ping` pulse. Shared by Dashboard and MatchPanel.
-- [x] Schedule columns: Round, Match ID, Match, Date, Time, Status, Action.
+- [x] Schedule columns: Round, Match ID, Match, Date, Time, Referee, Status, Action.
 - [x] Date formatted as `(Sat) May 1`.
 - [x] Test mode amber banner at page top.
 
@@ -171,6 +173,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 
 ### Lobby Actions
 - [x] `POST /api/match/:id/create-lobby` — `!mp make`, waits BanchoBot SSE, sends setup commands, writes lobby_url to Sheet, Discord staff webhook.
+- [x] Emergency lobby creation grants IRC ref access to both the assigned referee(s) and current authenticated operator.
 - [x] `POST /api/match/:id/join-lobby` — validates mp ID, alive check via SSE, writes lobby_url.
 - [x] `POST /api/match/:id/close-lobby` — `!mp close`, chat log as .txt to staff webhook.
 - [x] `POST /api/match/:id/remind` — Discord ping with `<@discord_id>` + `<t:UNIX:R>` timestamp.
@@ -297,6 +300,7 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | GET | `/api/auth/session/debug` | Done, local-only |
 | GET | `/api/auth/osu/preflight` | Done, local-only |
 | GET | `/api/matches` | Done |
+| PUT | `/api/match/:id/referee` | Done |
 | GET | `/api/match/:id/mappool` | Done |
 | GET | `/api/match/:id/inventory` | Done |
 | PUT | `/api/match/:id/inventory` | Done |

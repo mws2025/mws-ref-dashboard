@@ -126,6 +126,7 @@ function App() {
           tournamentName={tournamentName}
           abbreviation={abbreviation}
           testMode={testMode}
+          canManageAssignments={sessionUser?.osu_id !== 0}
           onOpenMatch={(m) => navigate(`/match/${m.id}`, { state: { match: m } })}
           onLogout={() => { void logout() }}
         />

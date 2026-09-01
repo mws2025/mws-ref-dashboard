@@ -147,7 +147,10 @@ player_id, osu_id, name, discord_id, status
 
 `player_a` and `player_b` may be player IDs; the API resolves them through `players`.
 
-`referee` is used for the dashboard "Your matches" list. Multiple refs may be separated with commas, semicolons, or pipes.
+`referee` is used for the dashboard "Your matches" list. Multiple refs may be separated with commas, semicolons, or
+pipes. Portal sign-up only claims an empty cell and never replaces another referee. A referee may withdraw only their
+own assignment. Any authenticated referee can still open an unfinished match for emergency coverage without changing
+the assignment.
 
 Match statuses are normalized to:
 
@@ -248,6 +251,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/matches` | Returns all, assigned, and active Sheets-backed matches. |
+| `PUT` | `/api/match/:matchId/referee` | Uses `{ "action": "signup" }` or `{ "action": "signout" }` to update the authenticated referee's assignment. |
 | `GET` | `/api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Returns pool maps, match overrides, and wins. |
 | `GET` | `/api/match/:matchId/inventory?playerA=&playerB=` | Returns both players' ingredient inventories. |
 | `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
@@ -314,7 +318,7 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 | --- | --- | --- |
 | `POST` | `/api/irc/send` | Sends one `{ channel, message }` payload through the IRC relay. |
 | `GET` | `/api/irc/stream?channel=` | Proxies the relay's server-sent event stream. |
-| `POST` | `/api/match/:matchId/create-lobby` | Creates a lobby, writes its URL, and returns setup commands. |
+| `POST` | `/api/match/:matchId/create-lobby` | Creates a lobby, adds assigned/current referees, writes its URL, and returns setup commands. |
 | `POST` | `/api/match/:matchId/join-lobby` | Attaches and probes an existing multiplayer lobby. |
 | `POST` | `/api/match/:matchId/close-lobby` | Closes the lobby and uploads its chat log when configured. |
 | `POST` | `/api/match/:matchId/remind` | Posts the configured Discord match reminder. |
@@ -416,7 +420,7 @@ Other mutation bodies:
 | Route | JSON body |
 | --- | --- |
 | `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
-| `POST /api/match/:matchId/create-lobby` | `{ "refUsername": "..." }` (players are read from the match sheet) |
+| `POST /api/match/:matchId/create-lobby` | No body required; players and assigned refs come from the Sheet and the current operator comes from the session. |
 | `POST /api/match/:matchId/setup-map` | `{ "slot": "NM1" }` |
 | `POST /api/match/:matchId/match-score` | `{ "scoreA": 3, "scoreB": 2 }` |
 | `POST /api/match/:matchId/reset` | No body required. |
@@ -435,6 +439,7 @@ Dashboard:
 
 - Reads `GET /api/matches`.
 - Displays "Your matches", active matches, and tournament schedule.
+- Shows inline referee assignment controls and permits emergency opening without reassignment.
 - Refreshes match data every 15 seconds while mounted.
 
 Match panel:

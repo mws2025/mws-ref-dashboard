@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
+  canClaimRefereeAssignment,
   formatLobbyTitle,
   homeModIngredientAwards,
   isBanLimitReached,
@@ -12,6 +13,8 @@ import {
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
+  refereeAssignments,
+  refereeIsAssigned,
 } from "../src/lib/match-rules.ts"
 
 describe("roll announcements", () => {
@@ -73,6 +76,14 @@ describe("match progression", () => {
 })
 
 describe("referee input and lobby formatting", () => {
+  test("parses referee assignments without allowing partial-name matches", () => {
+    expect(refereeAssignments("Ref One, RefTwo | RefThree")).toEqual(["Ref One", "RefTwo", "RefThree"])
+    expect(refereeIsAssigned("Ref One, RefTwo", "reftwo")).toBe(true)
+    expect(refereeIsAssigned("Ref One, RefTwo", "Ref")).toBe(false)
+    expect(canClaimRefereeAssignment(undefined, "New Ref")).toBe(true)
+    expect(canClaimRefereeAssignment("Existing Ref", "New Ref")).toBe(false)
+  })
+
   test("accepts score and accuracy formatting", () => {
     expect(parseScoreValue("987,432")).toBe(987432)
     expect(parseScoreValue("98.76%")).toBe(98.76)

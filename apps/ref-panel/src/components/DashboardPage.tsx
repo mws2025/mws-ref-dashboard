@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { CalendarDays, Radio, CalendarOff, RefreshCw } from "lucide-react"
+import { CalendarDays, Radio, CalendarOff, RefreshCw, UserMinus, UserPlus } from "lucide-react"
+import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
@@ -16,6 +17,7 @@ import {
 } from "@/components/ui/table"
 import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
+import { refereeAssignments, refereeIsAssigned } from "@/lib/match-rules"
 import type { Match } from "@/types"
 import { LiveBadge } from "./LiveBadge"
 
@@ -37,6 +39,7 @@ interface Props {
   tournamentName?: string
   abbreviation?: string
   testMode?: boolean
+  canManageAssignments?: boolean
   onOpenMatch: (m: Match) => void
   onLogout: () => void
 }
@@ -50,10 +53,8 @@ function formatMatchDate(raw: string): string {
   return `(${weekday}) ${month} ${d.getDate()}`
 }
 
-function canOpenMatch(match: Match, currentUserName: string): boolean {
-  const assignedReferee = match.referee?.trim().toLowerCase()
-  const currentReferee = currentUserName.trim().toLowerCase()
-  return match.status === "live" || (assignedReferee === currentReferee && !isTerminalMatchStatus(match.status))
+function canOpenMatch(match: Match): boolean {
+  return !isTerminalMatchStatus(match.status)
 }
 
 
@@ -94,6 +95,7 @@ function SkeletonTableRows() {
           <TableCell><Skeleton className="h-3 w-36" /></TableCell>
           <TableCell><Skeleton className="h-3 w-16" /></TableCell>
           <TableCell><Skeleton className="h-3 w-12" /></TableCell>
+          <TableCell><Skeleton className="h-3 w-20" /></TableCell>
           <TableCell><Skeleton className="h-4 w-14 rounded-full" /></TableCell>
           <TableCell />
         </TableRow>
@@ -102,12 +104,13 @@ function SkeletonTableRows() {
   )
 }
 
-export function DashboardPage({ currentUserName, tournamentName, testMode, onOpenMatch, onLogout }: Props) {
+export function DashboardPage({ currentUserName, tournamentName, testMode, canManageAssignments = true, onOpenMatch, onLogout }: Props) {
   const fullName = tournamentName || `${TOURNAMENT_NAME} - ${TOURNAMENT_SUBTITLE}`
   const [nameA, nameB] = splitTournamentName(fullName)
   const [matchesResponse, setMatchesResponse] = useState<MatchesResponse | null>(null)
   const [matchesError, setMatchesError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [assignmentPending, setAssignmentPending] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -143,6 +146,63 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
   const yourMatches = matchesResponse?.yourMatches ?? []
   const activeMatches = matchesResponse?.activeMatches ?? []
   const scheduleMatches = matchesResponse?.matches ?? []
+
+  async function updateRefereeAssignment(match: Match, action: "signup" | "signout") {
+    if (assignmentPending) return
+    setAssignmentPending(match.id)
+    try {
+      const res = await fetch(`/api/match/${match.id}/referee`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      })
+      const data = await res.json() as { error?: string; referee?: string }
+      if (!res.ok) throw new Error(data.error ?? "Failed to update referee assignment")
+
+      const referee = data.referee ?? ""
+      setMatchesResponse((current) => {
+        if (!current) return current
+        const matches = current.matches.map((candidate) =>
+          candidate.id === match.id ? { ...candidate, referee: referee || undefined } : candidate
+        )
+        return {
+          ...current,
+          matches,
+          yourMatches: matches.filter((candidate) => refereeIsAssigned(candidate.referee, currentUserName)),
+          activeMatches: matches.filter((candidate) => candidate.status === "live"),
+          updatedAt: new Date().toISOString(),
+        }
+      })
+      toast.success(action === "signup" ? "Signed up for match" : "Withdrew from match")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update referee assignment")
+    } finally {
+      setAssignmentPending(null)
+    }
+  }
+
+  function assignmentButton(match: Match) {
+    if (!canManageAssignments || isTerminalMatchStatus(match.status)) return null
+    const assigned = refereeAssignments(match.referee)
+    const assignedToCurrentUser = refereeIsAssigned(match.referee, currentUserName)
+    if (assigned.length > 0 && !assignedToCurrentUser) return null
+
+    const action = assignedToCurrentUser ? "signout" : "signup"
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={assignmentPending !== null}
+        onClick={() => { void updateRefereeAssignment(match, action) }}
+      >
+        {assignedToCurrentUser
+          ? <UserMinus className="mr-1.5 h-3.5 w-3.5" />
+          : <UserPlus className="mr-1.5 h-3.5 w-3.5" />}
+        {assignmentPending === match.id ? "Saving..." : assignedToCurrentUser ? "Withdraw" : "Sign up"}
+      </Button>
+    )
+  }
 
   return (
     <div className="min-h-svh bg-background text-foreground">
@@ -188,6 +248,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
                       <div>
                         <p className="font-heading text-lg font-semibold">{m.playerA} <span className="font-sans normal-case text-muted-foreground">vs</span> {m.playerB}</p>
                         <p className="text-sm text-muted-foreground">{m.round} · {formatMatchDate(m.date)} · {m.time}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Referee: {m.referee || "Unassigned"}</p>
                       </div>
                       {m.status === "live"
                         ? <LiveBadge />
@@ -195,10 +256,11 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
                       }
                     </div>
                   </CardHeader>
-                  <CardContent>
-                    <Button className="w-full" size="sm" disabled={!canOpenMatch(m, currentUserName)} onClick={() => onOpenMatch(m)}>
+                  <CardContent className="flex gap-2">
+                    <Button className="flex-1" size="sm" disabled={!canOpenMatch(m)} onClick={() => onOpenMatch(m)}>
                       Open Ref Panel
                     </Button>
+                    {assignmentButton(m)}
                   </CardContent>
                 </Card>
               ))}
@@ -219,14 +281,16 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
                       <div>
                         <p className="font-heading text-lg font-semibold">{m.playerA} <span className="font-sans normal-case text-muted-foreground">vs</span> {m.playerB}</p>
                         <p className="text-sm text-muted-foreground">{m.round} · {formatMatchDate(m.date)} · {m.time}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Referee: {m.referee || "Unassigned"}</p>
                       </div>
                       <LiveBadge />
                     </div>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="flex gap-2">
                     <Button className="w-full" size="sm" onClick={() => onOpenMatch(m)}>
                       Open Ref Panel
                     </Button>
+                    {assignmentButton(m)}
                   </CardContent>
                 </Card>
               ))}
@@ -245,7 +309,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
               <Table>
                 <TableHeader>
                   <TableRow className="bg-card/60 hover:bg-card/60">
-                    {["Round", "Match ID", "Match", "Date", "Time", "Status", "Action"].map((h) => (
+                    {["Round", "Match ID", "Match", "Date", "Time", "Referee", "Status", "Action"].map((h) => (
                       <TableHead key={h} className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground whitespace-nowrap">
                         {h}
                       </TableHead>
@@ -265,22 +329,26 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, onOpe
                         </TableCell>
                         <TableCell className="text-muted-foreground whitespace-nowrap">{formatMatchDate(m.date)}</TableCell>
                         <TableCell className="text-muted-foreground">{m.time}</TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">{m.referee || "Unassigned"}</TableCell>
                         <TableCell>
                           {m.status === "live"
                             ? <LiveBadge />
                             : <Badge variant={statusVariant(m.status)} className="text-xs capitalize">{m.status}</Badge>
                           }
                         </TableCell>
-                        <TableCell className="text-right">
-                          {canOpenMatch(m, currentUserName) && (
-                            <Button size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
-                          )}
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            {canOpenMatch(m) && (
+                              <Button size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
+                            )}
+                            {assignmentButton(m)}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={8}>
                         <div className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
                           <CalendarOff className="h-4 w-4 opacity-60" />
                           No scheduled matches found.

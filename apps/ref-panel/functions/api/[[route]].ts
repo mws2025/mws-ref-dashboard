@@ -4,6 +4,7 @@ import { handle } from "hono/cloudflare-pages"
 import { sign, verify } from "hono/jwt"
 import {
   addLobbyMod,
+  canClaimRefereeAssignment,
   formatLobbyMods,
   formatLobbyTitle,
   homeModIngredientAwards,
@@ -14,6 +15,8 @@ import {
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
   parseScoreValue,
+  refereeAssignments,
+  refereeIsAssigned,
 } from "../../src/lib/match-rules"
 
 type Bindings = {
@@ -815,15 +818,7 @@ function isActiveMatch(match: ApiMatch): boolean {
 }
 
 function refereeMatchesNotes(notes: string, username: string): boolean {
-  const normalizedUsername = username.trim().toLowerCase()
-  if (!normalizedUsername) {
-    return false
-  }
-
-  return notes
-    .split(/[,;|]/)
-    .map((entry) => entry.trim().toLowerCase())
-    .some((entry) => entry === normalizedUsername)
+  return refereeIsAssigned(notes, username)
 }
 
 function getPlayerName(playerIdOrName: string, playersById: Map<string, string>): string {
@@ -2228,6 +2223,66 @@ app.get("/api/matches", async (c) => {
       },
       500
     )
+  }
+})
+
+app.put("/api/match/:matchId/referee", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+  if (!sessionUser) return c.json({ error: "Unauthorized" }, 401)
+
+  let body: { action?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+  if (body.action !== "signup" && body.action !== "signout") {
+    return c.json({ error: "action must be signup or signout" }, 400)
+  }
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    if (match.status === "completed" || match.status === "forfeit") {
+      return c.json({ error: "Completed matches cannot change referee assignment" }, 409)
+    }
+
+    const before = refereeAssignments(match.referee)
+    const assignedToCurrentUser = refereeIsAssigned(match.referee, sessionUser.username)
+    let after: string[]
+
+    if (body.action === "signup") {
+      if (assignedToCurrentUser) {
+        return c.json({ ok: true, referee: before.join(", "), unchanged: true })
+      }
+      if (!canClaimRefereeAssignment(match.referee, sessionUser.username)) {
+        return c.json({
+          error: `Already assigned to ${before.join(", ")}; open the match directly for emergency coverage`,
+        }, 409)
+      }
+      after = [sessionUser.username]
+    } else {
+      if (!assignedToCurrentUser) {
+        return c.json({ error: "Only a signed-up referee can withdraw from this match" }, 409)
+      }
+      after = before.filter((name) => name.toLowerCase() !== sessionUser.username.trim().toLowerCase())
+    }
+
+    const referee = after.join(", ")
+    await updateMatchField(c.env, matchId, "referee", referee)
+    await appendAuditLog(
+      c.env,
+      sessionUser.username,
+      body.action === "signup" ? "referee_signup" : "referee_signout",
+      "match",
+      matchId,
+      JSON.stringify({ referee: match.referee ?? "" }),
+      JSON.stringify({ referee }),
+    ).catch(() => {})
+    return c.json({ ok: true, referee })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Referee assignment failed" }, 500)
   }
 })
 
@@ -4205,25 +4260,21 @@ app.get("/api/irc/stream", async (c) => {
 
 app.post("/api/match/:matchId/create-lobby", async (c) => {
   const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
   if (!relayUrl || !relaySecret) {
     return c.json({ error: "IRC relay not configured" }, 503)
   }
 
-  let body: { playerA?: string; playerB?: string; refUsername?: string }
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: "Invalid JSON" }, 400)
-  }
-
-  const { refUsername = "" } = body
-
   const match = await getMatchById(c.env, matchId)
   if (!match) return c.json({ error: "Match not found" }, 404)
   const playerA = match.playerA
   const playerB = match.playerB
+  const refereeUsernames = refereeAssignments(match.referee)
+  if (sessionUser?.username && !refereeIsAssigned(match.referee, sessionUser.username)) {
+    refereeUsernames.push(sessionUser.username)
+  }
 
   // Read config for lobby settings
   const configMap = await getConfigMap(c.env)
@@ -4247,7 +4298,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     const fakeChannel = `#mp_${fakeId}`
     const fakeFollowUpCmds: string[] = [`!mp set ${teamMode} ${scoringMode} ${lobbySize}`]
     if (enforceNF) fakeFollowUpCmds.push("!mp mods NF")
-    if (refUsername) fakeFollowUpCmds.push(`!mp addref ${refUsername}`)
+    for (const referee of refereeUsernames) fakeFollowUpCmds.push(`!mp addref ${lobbyInviteTarget(referee)}`)
     fakeFollowUpCmds.push(...inviteCommands)
     try {
       await updateMatchField(c.env, matchId, "lobby_url", fakeLobbyUrl)
@@ -4354,7 +4405,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
   const mpSetCmd = `!mp set ${teamMode} ${scoringMode} ${lobbySize}`
   const followUpCmds: string[] = [mpSetCmd]
   if (enforceNF) followUpCmds.push("!mp mods NF")
-  if (refUsername) followUpCmds.push(`!mp addref ${refUsername}`)
+  for (const referee of refereeUsernames) followUpCmds.push(`!mp addref ${lobbyInviteTarget(referee)}`)
   followUpCmds.push(...inviteCommands)
 
   // Write lobby URL to Sheets (best-effort)

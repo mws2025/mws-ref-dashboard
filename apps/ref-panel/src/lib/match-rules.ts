@@ -14,6 +14,25 @@ export function isBanLimitReached(currentBans: number): boolean {
   return currentBans >= MAX_MATCH_BANS
 }
 
+export function refereeAssignments(value?: string): string[] {
+  return (value ?? "")
+    .split(/[,;|]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+export function refereeIsAssigned(value: string | undefined, username: string): boolean {
+  const normalizedUsername = username.trim().toLowerCase()
+  return Boolean(normalizedUsername) && refereeAssignments(value).some(
+    (entry) => entry.toLowerCase() === normalizedUsername,
+  )
+}
+
+export function canClaimRefereeAssignment(value: string | undefined, username: string): boolean {
+  const assigned = refereeAssignments(value)
+  return assigned.length === 0 || refereeIsAssigned(value, username)
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null
