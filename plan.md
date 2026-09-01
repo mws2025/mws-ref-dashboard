@@ -146,7 +146,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] shadcn `Table` + `ScrollArea` for schedule section.
 - [x] `LiveBadge` component with `animate-ping` pulse. Shared by Dashboard and MatchPanel.
 - [x] Schedule columns: Round, Match ID, Match, Date, Time, Referee, Status, Action.
-- [x] Schedule defaults to natural Match ID order and supports sorting every column except Status and Action.
+- [x] Schedule defaults to natural Match ID order; Match, Date, and Referee can also sort, with Date automatically sorting each day's times.
 - [x] Admin-only shadcn schedule editor updates match date/time with calendar selection and validated `HH:MM` input.
 - [x] Date formatted as `(Sat) May 1`.
 - [x] Test mode amber banner at page top.

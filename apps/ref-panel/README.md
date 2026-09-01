@@ -445,7 +445,8 @@ Dashboard:
 - Displays "Your matches", active matches, and tournament schedule.
 - Shows inline referee assignment controls and permits emergency opening without reassignment.
 - Shows an admin-only calendar action for editing match date and 24-hour time through shadcn controls.
-- Sorts the schedule by Match ID ascending by default; Round, Match ID, Match, Date, Time, and Referee headers toggle sorting.
+- Sorts the schedule by Match ID ascending by default. Match ID, Match, Date, and Referee headers toggle sorting; Date
+  automatically uses time of day as its secondary order. Round, Time, Status, and Action are not independently sortable.
 - Refreshes match data every 15 seconds while mounted.
 
 Match panel:

@@ -62,15 +62,15 @@ type MatchesResponse = {
   updatedAt: string
 }
 
-type ScheduleSortKey = "round" | "id" | "match" | "date" | "time" | "referee"
+type ScheduleSortKey = "id" | "match" | "date" | "referee"
 type SortDirection = "asc" | "desc"
 
 const SCHEDULE_COLUMNS: readonly { label: string; className: string; sortKey?: ScheduleSortKey }[] = [
-  { label: "Round", className: "w-24", sortKey: "round" },
+  { label: "Round", className: "w-24" },
   { label: "Match ID", className: "w-24", sortKey: "id" },
   { label: "Match", className: "w-64", sortKey: "match" },
   { label: "Date", className: "w-32", sortKey: "date" },
-  { label: "Time", className: "w-20", sortKey: "time" },
+  { label: "Time", className: "w-20" },
   { label: "Referee", className: "w-40", sortKey: "referee" },
   { label: "Status", className: "w-28" },
   { label: "Action", className: "w-[244px] text-right" },
@@ -106,11 +106,9 @@ function compareMatchSchedule(left: Match, right: Match): number {
 
 function scheduleSortValue(match: Match, key: ScheduleSortKey): string {
   switch (key) {
-    case "round": return match.round
     case "id": return match.id
     case "match": return `${match.playerA} vs ${match.playerB}`
     case "date": return match.date
-    case "time": return match.time
     case "referee": return match.referee ?? ""
   }
 }
@@ -223,10 +221,13 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
   const activeMatches = matchesResponse?.activeMatches ?? []
   const scheduleMatches = matchesResponse?.matches ?? []
   const sortedScheduleMatches = [...scheduleMatches].sort((left, right) => {
-    const order = compareNatural(
+    let order = compareNatural(
       scheduleSortValue(left, scheduleSort.key),
       scheduleSortValue(right, scheduleSort.key),
     )
+    if (order === 0 && scheduleSort.key === "date") {
+      order = compareNatural(left.time, right.time)
+    }
     return (scheduleSort.direction === "asc" ? order : -order) || compareNatural(left.id, right.id)
   })
 
