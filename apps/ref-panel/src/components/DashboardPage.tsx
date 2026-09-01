@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -33,6 +33,17 @@ type MatchesResponse = {
   activeMatches: Match[]
   updatedAt: string
 }
+
+const SCHEDULE_COLUMNS = [
+  { label: "Round", className: "w-24" },
+  { label: "Match ID", className: "w-24" },
+  { label: "Match", className: "w-64" },
+  { label: "Date", className: "w-32" },
+  { label: "Time", className: "w-20" },
+  { label: "Referee", className: "w-40" },
+  { label: "Status", className: "w-28" },
+  { label: "Action", className: "w-[204px] text-right" },
+] as const
 
 interface Props {
   currentUserName: string
@@ -193,6 +204,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
       <Button
         size="sm"
         variant="outline"
+        className="w-[108px] shrink-0"
         disabled={assignmentPending !== null}
         onClick={() => { void updateRefereeAssignment(match, action) }}
       >
@@ -287,7 +299,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                     </div>
                   </CardHeader>
                   <CardContent className="flex gap-2">
-                    <Button className="w-full" size="sm" onClick={() => onOpenMatch(m)}>
+                    <Button className="flex-1" size="sm" onClick={() => onOpenMatch(m)}>
                       Open Ref Panel
                     </Button>
                     {assignmentButton(m)}
@@ -306,12 +318,12 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
           <h2 className="font-heading text-xl">Tournament schedule</h2>
           <div className="overflow-hidden rounded-lg border border-border">
             <ScrollArea className="w-full">
-              <Table>
+              <Table className="min-w-[1120px] table-fixed">
                 <TableHeader>
                   <TableRow className="bg-card/60 hover:bg-card/60">
-                    {["Round", "Match ID", "Match", "Date", "Time", "Referee", "Status", "Action"].map((h) => (
-                      <TableHead key={h} className="font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground whitespace-nowrap">
-                        {h}
+                    {SCHEDULE_COLUMNS.map((column) => (
+                      <TableHead key={column.label} className={`font-heading text-xs uppercase tracking-[0.18em] text-muted-foreground ${column.className}`}>
+                        {column.label}
                       </TableHead>
                     ))}
                   </TableRow>
@@ -324,24 +336,24 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                       <TableRow key={m.id}>
                         <TableCell className="text-muted-foreground">{m.round}</TableCell>
                         <TableCell className="font-mono text-xs">{m.id}</TableCell>
-                        <TableCell className="font-medium whitespace-nowrap">
+                        <TableCell className="truncate font-medium" title={`${m.playerA} vs ${m.playerB}`}>
                           {m.playerA} <span className="text-muted-foreground">vs</span> {m.playerB}
                         </TableCell>
                         <TableCell className="text-muted-foreground whitespace-nowrap">{formatMatchDate(m.date)}</TableCell>
                         <TableCell className="text-muted-foreground">{m.time}</TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap">{m.referee || "Unassigned"}</TableCell>
+                        <TableCell className="truncate text-muted-foreground" title={m.referee || "Unassigned"}>{m.referee || "Unassigned"}</TableCell>
                         <TableCell>
                           {m.status === "live"
                             ? <LiveBadge />
                             : <Badge variant={statusVariant(m.status)} className="text-xs capitalize">{m.status}</Badge>
                           }
                         </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-2">
-                            {canOpenMatch(m) && (
-                              <Button size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
-                            )}
-                            {assignmentButton(m)}
+                        <TableCell className="w-[204px]">
+                          <div className="grid grid-cols-[72px_108px] justify-end gap-2">
+                            {canOpenMatch(m)
+                              ? <Button className="w-[72px]" size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
+                              : <span aria-hidden="true" />}
+                            {assignmentButton(m) ?? <span aria-hidden="true" />}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -358,6 +370,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                   )}
                 </TableBody>
               </Table>
+              <ScrollBar orientation="horizontal" />
             </ScrollArea>
           </div>
         </section>
