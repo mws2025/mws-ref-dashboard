@@ -128,10 +128,12 @@ Implemented routes:
 Access control uses the Sheets `access` tab:
 
 ```text
-username, osu_id, last_accessed_at
+username, osu_id, last_accessed_at, is_admin
 ```
 
 OAuth grants access only when osu! user details match a row in `access`. Successful login updates `last_accessed_at`.
+`is_admin` accepts `TRUE` or `FALSE`; the session response exposes it as `user.is_admin`, and the schedule mutation
+rechecks the Sheet before every write.
 
 ## Sheets Contracts
 
@@ -239,7 +241,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `GET` | `/api/auth/osu/login` | Public | Starts osu! OAuth and stores the state cookie. |
 | `GET` | `/api/auth/osu/callback?code=&state=` | Public | OAuth callback alias; validates access and creates the session. |
 | `GET` | `/auth/callback?code=&state=` | Public | Primary OAuth callback path with the same behavior as the API alias. |
-| `GET` | `/api/auth/session` | Public | Returns the current session or `401` when unauthenticated. |
+| `GET` | `/api/auth/session` | Public | Returns the current session, including `user.is_admin`, or `401` when unauthenticated. |
 | `POST` | `/api/auth/logout` | Public | Clears the session cookie. |
 | `GET` | `/api/auth/bypass` | Public | Creates a read-only demo session when `Restrict Access` is false. |
 | `GET` | `/api/auth/debug` | Local-only | Reports environment-variable presence without returning secret values. |
@@ -252,6 +254,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | --- | --- | --- |
 | `GET` | `/api/matches` | Returns all, assigned, and active Sheets-backed matches. |
 | `PUT` | `/api/match/:matchId/referee` | Uses `{ "action": "signup" }` or `{ "action": "signout" }` to update the authenticated referee's assignment. |
+| `PUT` | `/api/match/:matchId/schedule` | Admin-only update using `{ "date": "YYYY-MM-DD", "time": "HH:MM" }`. |
 | `GET` | `/api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Returns pool maps, match overrides, and wins. |
 | `GET` | `/api/match/:matchId/inventory?playerA=&playerB=` | Returns both players' ingredient inventories. |
 | `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
@@ -421,6 +424,7 @@ Other mutation bodies:
 | --- | --- |
 | `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
 | `POST /api/match/:matchId/create-lobby` | No body required; players and assigned refs come from the Sheet and the current operator comes from the session. |
+| `PUT /api/match/:matchId/schedule` | `{ "date": "2026-09-12", "time": "18:30" }` (admin only) |
 | `POST /api/match/:matchId/setup-map` | `{ "slot": "NM1" }` |
 | `POST /api/match/:matchId/match-score` | `{ "scoreA": 3, "scoreB": 2 }` |
 | `POST /api/match/:matchId/reset` | No body required. |
@@ -440,6 +444,7 @@ Dashboard:
 - Reads `GET /api/matches`.
 - Displays "Your matches", active matches, and tournament schedule.
 - Shows inline referee assignment controls and permits emergency opening without reassignment.
+- Shows an admin-only calendar action for editing match date and 24-hour time through shadcn controls.
 - Refreshes match data every 15 seconds while mounted.
 
 Match panel:

@@ -110,7 +110,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - `items`: item_id, name, cost, craft_condition, effect_type, effect_payload, enabled.
 - `item_events`: event_id, match_id, player_id, item_id, action, target, payload, created_by, created_at, reverted_at, status, activated_at, resolved_at, resolution.
 - `audit_log`: event_id, actor, action, entity_type, entity_id, before_json, after_json, created_at.
-- `access`: username, osu_id, last_accessed_at.
+- `access`: username, osu_id, last_accessed_at, is_admin.
 
 ---
 
@@ -127,6 +127,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] osu! OAuth2 login flow (server-side code exchange).
 - [x] Session JWT in HTTP-only cookie, 12h TTL.
 - [x] Referee allowlist against `access` sheet; updates `last_accessed_at`.
+- [x] `access.is_admin` is exposed in the session and rechecked server-side for admin mutations.
 - [x] Auth guard on all non-public `/api/*` routes.
 - [x] `Restrict Access = FALSE` config bypass: `/api/auth/bypass` issues demo session (osuId=0), blocks writes.
 - [x] Local-only diagnostics: `/api/auth/debug`, `/api/auth/osu/preflight`, `/api/auth/session/debug`.
@@ -145,6 +146,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] shadcn `Table` + `ScrollArea` for schedule section.
 - [x] `LiveBadge` component with `animate-ping` pulse. Shared by Dashboard and MatchPanel.
 - [x] Schedule columns: Round, Match ID, Match, Date, Time, Referee, Status, Action.
+- [x] Admin-only shadcn schedule editor updates match date/time with calendar selection and validated `HH:MM` input.
 - [x] Date formatted as `(Sat) May 1`.
 - [x] Test mode amber banner at page top.
 
@@ -301,6 +303,7 @@ The request and response contracts are documented in `apps/ref-panel/README.md`.
 | GET | `/api/auth/osu/preflight` | Done, local-only |
 | GET | `/api/matches` | Done |
 | PUT | `/api/match/:id/referee` | Done |
+| PUT | `/api/match/:id/schedule` | Done, admin-only |
 | GET | `/api/match/:id/mappool` | Done |
 | GET | `/api/match/:id/inventory` | Done |
 | PUT | `/api/match/:id/inventory` | Done |

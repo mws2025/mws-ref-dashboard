@@ -33,6 +33,35 @@ export function canClaimRefereeAssignment(value: string | undefined, username: s
   return assigned.length === 0 || refereeIsAssigned(value, username)
 }
 
+export function formatScheduleTimeInput(value: string): string {
+  const cleaned = value.replace(/[^\d:]/g, "")
+  if (cleaned.includes(":")) {
+    const [hours = "", minutes = ""] = cleaned.split(":")
+    return `${hours.slice(0, 2)}:${minutes.replace(/:/g, "").slice(0, 2)}`
+  }
+  const digits = cleaned.slice(0, 4)
+  return digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits
+}
+
+export function normalizeScheduleTime(value: string): string | null {
+  const match = formatScheduleTimeInput(value).match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours > 23 || minutes > 59) return null
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
+}
+
+export function isValidScheduleDate(value: string): boolean {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null

@@ -1,9 +1,22 @@
 import { useEffect, useState } from "react"
+import { format, isValid, parseISO } from "date-fns"
 import { CalendarDays, Radio, CalendarOff, RefreshCw, UserMinus, UserPlus } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -17,7 +30,12 @@ import {
 } from "@/components/ui/table"
 import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
-import { refereeAssignments, refereeIsAssigned } from "@/lib/match-rules"
+import {
+  formatScheduleTimeInput,
+  normalizeScheduleTime,
+  refereeAssignments,
+  refereeIsAssigned,
+} from "@/lib/match-rules"
 import type { Match } from "@/types"
 import { LiveBadge } from "./LiveBadge"
 
@@ -42,7 +60,7 @@ const SCHEDULE_COLUMNS = [
   { label: "Time", className: "w-20" },
   { label: "Referee", className: "w-40" },
   { label: "Status", className: "w-28" },
-  { label: "Action", className: "w-[204px] text-right" },
+  { label: "Action", className: "w-[244px] text-right" },
 ] as const
 
 interface Props {
@@ -51,6 +69,7 @@ interface Props {
   abbreviation?: string
   testMode?: boolean
   canManageAssignments?: boolean
+  isAdmin?: boolean
   onOpenMatch: (m: Match) => void
   onLogout: () => void
 }
@@ -66,6 +85,15 @@ function formatMatchDate(raw: string): string {
 
 function canOpenMatch(match: Match): boolean {
   return !isTerminalMatchStatus(match.status)
+}
+
+function compareMatchSchedule(left: Match, right: Match): number {
+  return left.date.localeCompare(right.date) || left.time.localeCompare(right.time) || left.round.localeCompare(right.round)
+}
+
+function parseMatchDate(raw: string): Date | undefined {
+  const parsed = parseISO(raw)
+  return isValid(parsed) ? parsed : undefined
 }
 
 
@@ -115,13 +143,18 @@ function SkeletonTableRows() {
   )
 }
 
-export function DashboardPage({ currentUserName, tournamentName, testMode, canManageAssignments = true, onOpenMatch, onLogout }: Props) {
+export function DashboardPage({ currentUserName, tournamentName, testMode, canManageAssignments = true, isAdmin = false, onOpenMatch, onLogout }: Props) {
   const fullName = tournamentName || `${TOURNAMENT_NAME} - ${TOURNAMENT_SUBTITLE}`
   const [nameA, nameB] = splitTournamentName(fullName)
   const [matchesResponse, setMatchesResponse] = useState<MatchesResponse | null>(null)
   const [matchesError, setMatchesError] = useState<string | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [assignmentPending, setAssignmentPending] = useState<string | null>(null)
+  const [scheduleMatch, setScheduleMatch] = useState<Match | null>(null)
+  const [scheduleDate, setScheduleDate] = useState<Date>()
+  const [scheduleTime, setScheduleTime] = useState("")
+  const [scheduleSaving, setScheduleSaving] = useState(false)
+  const [calendarOpen, setCalendarOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -185,7 +218,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
           updatedAt: new Date().toISOString(),
         }
       })
-      toast.success(action === "signup" ? "Signed up for match" : "Withdrew from match")
+      toast.success(action === "signup" ? "Signed in to match" : "Signed out of match")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update referee assignment")
     } finally {
@@ -211,7 +244,73 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
         {assignedToCurrentUser
           ? <UserMinus className="mr-1.5 h-3.5 w-3.5" />
           : <UserPlus className="mr-1.5 h-3.5 w-3.5" />}
-        {assignmentPending === match.id ? "Saving..." : assignedToCurrentUser ? "Withdraw" : "Sign up"}
+        {assignmentPending === match.id ? "Saving..." : assignedToCurrentUser ? "Sign out" : "Sign in"}
+      </Button>
+    )
+  }
+
+  function openScheduleEditor(match: Match) {
+    setScheduleMatch(match)
+    setScheduleDate(parseMatchDate(match.date))
+    setScheduleTime(formatScheduleTimeInput(match.time))
+    setCalendarOpen(false)
+  }
+
+  async function saveSchedule() {
+    if (!scheduleMatch || !scheduleDate || scheduleSaving) return
+    const time = normalizeScheduleTime(scheduleTime)
+    if (!time) {
+      toast.error("Enter a valid 24-hour time in HH:MM format")
+      return
+    }
+
+    const date = format(scheduleDate, "yyyy-MM-dd")
+    setScheduleSaving(true)
+    try {
+      const res = await fetch(`/api/match/${scheduleMatch.id}/schedule`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date, time }),
+      })
+      const data = await res.json() as { error?: string; date?: string; time?: string }
+      if (!res.ok) throw new Error(data.error ?? "Failed to update match schedule")
+
+      const update = (matches: Match[]) => matches
+        .map((candidate) =>
+          candidate.id === scheduleMatch.id
+            ? { ...candidate, date: data.date ?? date, time: data.time ?? time }
+            : candidate
+        )
+        .sort(compareMatchSchedule)
+      setMatchesResponse((current) => current ? {
+        ...current,
+        matches: update(current.matches),
+        yourMatches: update(current.yourMatches),
+        activeMatches: update(current.activeMatches),
+        updatedAt: new Date().toISOString(),
+      } : current)
+      setScheduleMatch(null)
+      toast.success("Match schedule updated")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update match schedule")
+    } finally {
+      setScheduleSaving(false)
+    }
+  }
+
+  function scheduleButton(match: Match) {
+    if (!isAdmin) return null
+    return (
+      <Button
+        size="icon-sm"
+        variant="outline"
+        className="size-8 shrink-0"
+        title="Edit schedule"
+        onClick={() => openScheduleEditor(match)}
+      >
+        <CalendarDays className="h-3.5 w-3.5" />
+        <span className="sr-only">Edit schedule</span>
       </Button>
     )
   }
@@ -318,7 +417,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
           <h2 className="font-heading text-xl">Tournament schedule</h2>
           <div className="overflow-hidden rounded-lg border border-border">
             <ScrollArea className="w-full">
-              <Table className="min-w-[1120px] table-fixed">
+              <Table className="min-w-[1160px] table-fixed">
                 <TableHeader>
                   <TableRow className="bg-card/60 hover:bg-card/60">
                     {SCHEDULE_COLUMNS.map((column) => (
@@ -348,12 +447,13 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                             : <Badge variant={statusVariant(m.status)} className="text-xs capitalize">{m.status}</Badge>
                           }
                         </TableCell>
-                        <TableCell className="w-[204px]">
-                          <div className="grid grid-cols-[72px_108px] justify-end gap-2">
+                        <TableCell className="w-[244px]">
+                          <div className="grid grid-cols-[72px_108px_32px] justify-end gap-2">
                             {canOpenMatch(m)
                               ? <Button className="w-[72px]" size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
                               : <span aria-hidden="true" />}
                             {assignmentButton(m) ?? <span aria-hidden="true" />}
+                            {scheduleButton(m) ?? <span aria-hidden="true" />}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -376,6 +476,80 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
         </section>
 
       </div>
+
+      <Dialog
+        open={scheduleMatch !== null}
+        onOpenChange={(open) => {
+          if (!open && !scheduleSaving) setScheduleMatch(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit match schedule</DialogTitle>
+            <DialogDescription>
+              {scheduleMatch ? `${scheduleMatch.playerA} vs ${scheduleMatch.playerB}` : "Select a date and time."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-1">
+            <div className="grid gap-2">
+              <Label htmlFor="schedule-date">Date</Label>
+              <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="schedule-date"
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start font-normal"
+                  >
+                    <CalendarDays className="mr-2 h-4 w-4" />
+                    {scheduleDate ? format(scheduleDate, "PPP") : "Select date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={scheduleDate}
+                    onSelect={(date) => {
+                      setScheduleDate(date)
+                      if (date) setCalendarOpen(false)
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="schedule-time">Time</Label>
+              <Input
+                id="schedule-time"
+                value={scheduleTime}
+                inputMode="numeric"
+                maxLength={5}
+                placeholder="HH:MM"
+                aria-invalid={scheduleTime.length > 0 && normalizeScheduleTime(scheduleTime) === null}
+                onChange={(event) => setScheduleTime(formatScheduleTimeInput(event.target.value))}
+                onBlur={() => {
+                  const normalized = normalizeScheduleTime(scheduleTime)
+                  if (normalized) setScheduleTime(normalized)
+                }}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" disabled={scheduleSaving} onClick={() => setScheduleMatch(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!scheduleDate || !normalizeScheduleTime(scheduleTime) || scheduleSaving}
+              onClick={() => { void saveSchedule() }}
+            >
+              {scheduleSaving ? "Saving..." : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

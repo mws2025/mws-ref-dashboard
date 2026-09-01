@@ -9,12 +9,14 @@ import {
   formatLobbyTitle,
   homeModIngredientAwards,
   isBanLimitReached,
+  isValidScheduleDate,
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
   parseScoreValue,
+  normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
 } from "../../src/lib/match-rules"
@@ -759,7 +761,7 @@ async function getSheetValuesBatch(env: Bindings, rangesA1: readonly string[]): 
 }
 
 async function getAccessRows(env: Bindings): Promise<string[][]> {
-  return getSheetValues(env, "access!A2:C")
+  return getSheetValues(env, "access!A2:D")
 }
 
 function normalizeHeader(header: string): string {
@@ -919,7 +921,12 @@ function matchesFromSheetValues(matchValues: string[][], playerValues: string[][
     .sort(compareMatches)
 }
 
-function findAuthorizedAccessRow(rows: string[][], user: OsuUser): number | null {
+type AccessEntry = {
+  rowNumber: number
+  isAdmin: boolean
+}
+
+function findAuthorizedAccessEntry(rows: string[][], user: OsuUser): AccessEntry | null {
   const username = user.username.trim().toLowerCase()
   const osuId = String(user.id)
 
@@ -928,11 +935,19 @@ function findAuthorizedAccessRow(rows: string[][], user: OsuUser): number | null
     const rowUsername = (row[0] ?? "").trim().toLowerCase()
     const rowOsuId = (row[1] ?? "").trim()
     if (rowUsername === username && rowOsuId === osuId) {
-      return i + 2
+      return {
+        rowNumber: i + 2,
+        isAdmin: (row[3] ?? "").trim().toLowerCase() === "true",
+      }
     }
   }
 
   return null
+}
+
+async function isSessionAdmin(env: Bindings, user: SessionUser): Promise<boolean> {
+  const rows = await getAccessRows(env)
+  return findAuthorizedAccessEntry(rows, { id: user.osuId, username: user.username })?.isAdmin ?? false
 }
 
 async function updateLastAccessedAt(env: Bindings, rowNumber: number): Promise<void> {
@@ -2146,13 +2161,13 @@ async function handleOsuCallback(c: AppContext) {
     const accessToken = await exchangeOsuCodeForToken(c.env, oauthCode, redirectUri)
     const osuUser = await fetchOsuUser(accessToken, c.env)
     const accessRows = await getAccessRows(c.env)
-    const allowedRow = findAuthorizedAccessRow(accessRows, osuUser)
+    const accessEntry = findAuthorizedAccessEntry(accessRows, osuUser)
 
-    if (allowedRow === null) {
+    if (accessEntry === null) {
       return c.text("403 Forbidden", 403)
     }
 
-    await updateLastAccessedAt(c.env, allowedRow)
+    await updateLastAccessedAt(c.env, accessEntry.rowNumber)
 
     const sessionSecret = mustEnv(c.env, "SESSION_SECRET")
     const sessionToken = await issueSessionToken(sessionSecret, {
@@ -2182,11 +2197,15 @@ app.get("/api/auth/session", async (c) => {
   if (!sessionUser) {
     return c.json({ authenticated: false }, 401)
   }
+  const isAdmin = sessionUser.osuId === 0
+    ? false
+    : await isSessionAdmin(c.env, sessionUser).catch(() => false)
   return c.json({
     authenticated: true,
     user: {
       username: sessionUser.username,
       osu_id: sessionUser.osuId,
+      is_admin: isAdmin,
     },
   })
 })
@@ -2283,6 +2302,54 @@ app.put("/api/match/:matchId/referee", async (c) => {
     return c.json({ ok: true, referee })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Referee assignment failed" }, 500)
+  }
+})
+
+app.put("/api/match/:matchId/schedule", async (c) => {
+  const matchId = c.req.param("matchId")
+  const sessionUser = await readSessionUser(c)
+  if (!sessionUser) return c.json({ error: "Unauthorized" }, 401)
+
+  let isAdmin = false
+  try {
+    isAdmin = await isSessionAdmin(c.env, sessionUser)
+  } catch {
+    return c.json({ error: "Unable to verify admin access" }, 503)
+  }
+  if (!isAdmin) return c.json({ error: "Admin access required" }, 403)
+
+  let body: { date?: string; time?: string }
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const date = body.date?.trim() ?? ""
+  const time = normalizeScheduleTime(body.time?.trim() ?? "")
+  if (!isValidScheduleDate(date)) {
+    return c.json({ error: "date must be a valid YYYY-MM-DD value" }, 400)
+  }
+  if (!time) {
+    return c.json({ error: "time must be a valid 24-hour HH:MM value" }, 400)
+  }
+
+  try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    await updateMatchFields(c.env, matchId, { date, time })
+    await appendAuditLog(
+      c.env,
+      sessionUser.username,
+      "match_schedule_update",
+      "match",
+      matchId,
+      JSON.stringify({ date: match.date, time: match.time }),
+      JSON.stringify({ date, time }),
+    ).catch(() => {})
+    return c.json({ ok: true, date, time })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Schedule update failed" }, 500)
   }
 })
 

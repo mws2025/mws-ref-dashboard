@@ -8,7 +8,7 @@ import { MatchPanel } from "@/components/match/MatchPanel"
 import type { Match } from "@/types"
 
 type AuthStatus = "loading" | "guest" | "authenticated"
-type SessionUser = { username: string; osu_id: number }
+type SessionUser = { username: string; osu_id: number; is_admin: boolean }
 
 function getApiUrl(path: string): string {
   const configuredOrigin = import.meta.env.VITE_PAGES_DEV_ORIGIN?.trim()
@@ -127,6 +127,7 @@ function App() {
           abbreviation={abbreviation}
           testMode={testMode}
           canManageAssignments={sessionUser?.osu_id !== 0}
+          isAdmin={sessionUser?.is_admin === true}
           onOpenMatch={(m) => navigate(`/match/${m.id}`, { state: { match: m } })}
           onLogout={() => { void logout() }}
         />

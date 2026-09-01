@@ -3,9 +3,11 @@ import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
   canClaimRefereeAssignment,
+  formatScheduleTimeInput,
   formatLobbyTitle,
   homeModIngredientAwards,
   isBanLimitReached,
+  isValidScheduleDate,
   isTiebreakerReady,
   lobbyInviteTarget,
   lobbyModsForPool,
@@ -13,6 +15,7 @@ import {
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
+  normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
 } from "../src/lib/match-rules.ts"
@@ -82,6 +85,15 @@ describe("referee input and lobby formatting", () => {
     expect(refereeIsAssigned("Ref One, RefTwo", "Ref")).toBe(false)
     expect(canClaimRefereeAssignment(undefined, "New Ref")).toBe(true)
     expect(canClaimRefereeAssignment("Existing Ref", "New Ref")).toBe(false)
+  })
+
+  test("formats and validates schedule input", () => {
+    expect(formatScheduleTimeInput("0930")).toBe("09:30")
+    expect(formatScheduleTimeInput("9:30")).toBe("9:30")
+    expect(normalizeScheduleTime("9:30")).toBe("09:30")
+    expect(normalizeScheduleTime("24:00")).toBeNull()
+    expect(isValidScheduleDate("2026-09-01")).toBe(true)
+    expect(isValidScheduleDate("2026-02-30")).toBe(false)
   })
 
   test("accepts score and accuracy formatting", () => {
