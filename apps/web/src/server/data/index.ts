@@ -4,7 +4,18 @@ import { readSheetValues } from "../google"
 import { fetchOsuUsers, fetchOsuBeatmaps, computeBws } from "../osu"
 import { getEnv, requireEnv } from "../env"
 import { parseRows, toTable } from "./rows"
-import { parseMatches } from "./matches"
+import {
+  parseBracket,
+  parseRefPlayers,
+  parseRoundSettings,
+  roundsWithMatches,
+  applyLiveGuard,
+  BRACKET_RANGE,
+  MATCH_SETTINGS_RANGE,
+  REF_PLAYERS_RANGE,
+  type RoundSettings,
+  type ScheduleMatch,
+} from "./matches"
 import {
   parseStageSettings,
   parseStagePool,
@@ -17,7 +28,6 @@ import {
   type Staff,
   type Player,
   type MappoolStage,
-  type Match,
 } from "./schemas"
 import { PLAYER_KEY_ORDER, STAFF_KEY_ORDER, remap } from "./sheet-mappings"
 
@@ -238,21 +248,87 @@ export async function getMappoolStage(
   return stages.find((s) => s.tab.toUpperCase() === wanted) ?? null
 }
 
-export const getMatches = cached(TAGS.matches, async (): Promise<Match[]> => {
+export type Schedule = {
+  /** Rounds that have matches, in bracket order — the page's tabs. */
+  rounds: RoundSettings[]
+  /** Every match, ordered by match id. */
+  matches: ScheduleMatch[]
+}
+
+export const getSchedule = cached(TAGS.matches, async (): Promise<Schedule> => {
   const env = await getEnv()
-  const values = await readSheetValues(
-    requireEnv(env, "SHEET_ID_REFEREE"),
-    env.RANGE_MATCHES
+  const spreadsheetId = requireEnv(env, "SHEET_ID_REFEREE")
+
+  // Three independent tabs; one request each, in parallel.
+  const [bracketValues, settingsValues, playerValues] = await Promise.all([
+    readSheetValues(spreadsheetId, env.RANGE_BRACKET ?? BRACKET_RANGE),
+    readSheetValues(
+      spreadsheetId,
+      env.RANGE_MATCH_SETTINGS ?? MATCH_SETTINGS_RANGE
+    ),
+    readSheetValues(spreadsheetId, env.RANGE_REF_PLAYERS ?? REF_PLAYERS_RANGE),
+  ])
+
+  const rounds = parseRoundSettings(settingsValues)
+  const matches = applyLiveGuard(
+    parseBracket(bracketValues, rounds, parseRefPlayers(playerValues)),
+    rounds
   )
-  return parseMatches(toTable(values))
+
+  return {
+    rounds: roundsWithMatches(rounds, matches),
+    matches: await withPlayerRanks(matches),
+  }
 })
 
-// Schedule is just matches ordered by date/time — same source, different view.
-export async function getSchedule(): Promise<Match[]> {
-  const matches = await getMatches()
-  return [...matches].sort((a, b) =>
-    `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
-  )
+/**
+ * Attach live global ranks to both sides of every match.
+ *
+ * Best-effort, like the mappool covers: rank is decoration next to a name, so
+ * a failed lookup renders the schedule without ranks instead of 500ing. One
+ * batched call covers the whole bracket — ids repeat across rounds.
+ */
+async function withPlayerRanks(
+  matches: ScheduleMatch[]
+): Promise<ScheduleMatch[]> {
+  const ids = [
+    ...new Set(
+      matches.flatMap((m) =>
+        [m.p1.osuId, m.p2.osuId].filter((id): id is number => id != null)
+      )
+    ),
+  ]
+  if (ids.length === 0) return matches
+
+  let users: Awaited<ReturnType<typeof fetchOsuUsers>>
+  try {
+    users = await fetchOsuUsers(ids)
+  } catch (err) {
+    console.error("[matches] osu! rank enrichment failed:", err)
+    return matches
+  }
+
+  const withRank = (p: ScheduleMatch["p1"]) =>
+    p.osuId == null ? p : { ...p, rank: users.get(p.osuId)?.rank ?? null }
+
+  return matches.map((m) => ({ ...m, p1: withRank(m.p1), p2: withRank(m.p2) }))
+}
+
+/** One round by slug ("ro32"), or null if it has no matches. */
+export async function getScheduleRound(slug: string): Promise<{
+  schedule: Schedule
+  round: RoundSettings
+  matches: ScheduleMatch[]
+} | null> {
+  const schedule = await getSchedule()
+  const wanted = slug.toLowerCase()
+  const round = schedule.rounds.find((r) => r.slug === wanted)
+  if (!round) return null
+  return {
+    schedule,
+    round,
+    matches: schedule.matches.filter((m) => m.slug === round.slug),
+  }
 }
 
 export * from "./schemas"

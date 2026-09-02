@@ -18,7 +18,10 @@ declare global {
     // Optional A1 tab/range overrides (default: whole first tab)
     RANGE_STAFF?: string
     RANGE_PLAYERS?: string
-    RANGE_MATCHES?: string
+    // Referee sheet tabs. Defaults live in ./data/matches.ts.
+    RANGE_BRACKET?: string
+    RANGE_MATCH_SETTINGS?: string
+    RANGE_REF_PLAYERS?: string
     // Override for the pooling sheet's stage registry (default: Settings!A1:U60).
     // The stage LIST itself is read from that tab, not from env — a pool goes
     // public by ticking "Publish Pool" in the sheet.
