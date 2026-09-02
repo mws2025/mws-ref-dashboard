@@ -65,7 +65,7 @@ export const QUALIFIER_STAGE: RuleItem[] = [
     lobby.
   </>,
   "Each map will be played in the order shown on the Main Sheet",
-  "Seeding will be determined by the sum of the percentiles assuming a normal curve (z-percentile).",
+  "Seeding will be determined by the sum of the percentiles assuming a normal curve (z-sum).",
   <>
     All scores are locked after playing,{" "}
     <Highlight color="cherry">no retries</Highlight>.

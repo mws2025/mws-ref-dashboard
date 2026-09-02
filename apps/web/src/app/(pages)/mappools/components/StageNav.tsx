@@ -25,7 +25,7 @@ export function StageNav({ stages, activeTab }: StageNavProps) {
                 className={cn(
                   "focus-visible:ring-ring/50 block rounded-full border-2 px-4 py-2 text-sm font-semibold transition-colors focus-visible:ring-3 focus-visible:outline-none",
                   isActive
-                    ? "bg-espresso border-espresso text-cream"
+                    ? "bg-foam border-foam text-espresso"
                     : "border-caramel text-caramel hover:bg-caramel/10"
                 )}
               >
