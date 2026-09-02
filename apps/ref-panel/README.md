@@ -439,7 +439,7 @@ Other mutation bodies:
 | --- | --- |
 | `POST /api/irc/send` | `{ "channel": "#mp_123", "message": "!mp timer 120" }` |
 | `POST /api/match/:matchId/create-lobby` | No body required; players and assigned refs come from the Sheet and the current operator comes from the session. |
-| `PUT /api/match/:matchId/schedule` | `{ "date": "2026-09-12", "time": "18:30" }` (admin only) |
+| `PUT /api/match/:matchId/schedule` | `{ "date": "2026-09-12", "time": "18:30" }` (admin only; date is stored as a native Sheets date value and retains the cell format) |
 | `POST /api/match/:matchId/setup-map` | `{ "slot": "NM1" }` |
 | `POST /api/match/:matchId/match-score` | `{ "scoreA": 3, "scoreB": 2 }` |
 | `POST /api/match/:matchId/reset` | No body required. |

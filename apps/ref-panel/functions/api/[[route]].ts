@@ -11,7 +11,6 @@ import {
   homeModIngredientAwards,
   isBanLimitReached,
   isMissCountWinCondition,
-  isValidScheduleDate,
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
@@ -22,6 +21,7 @@ import {
   normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
+  scheduleDateSerial,
 } from "../../src/lib/match-rules"
 
 type Bindings = {
@@ -1279,7 +1279,9 @@ async function updateMatchField(env: Bindings, matchId: string, fieldName: strin
   await updateMatchFields(env, matchId, { [fieldName]: value })
 }
 
-async function updateMatchFields(env: Bindings, matchId: string, fields: Record<string, string>): Promise<void> {
+type SheetCellValue = string | number | boolean
+
+async function updateMatchFields(env: Bindings, matchId: string, fields: Record<string, SheetCellValue>): Promise<void> {
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const values = await getSheetValues(env, "matches!A1:Z")
   const [headers, ...rows] = values
@@ -1289,7 +1291,7 @@ async function updateMatchFields(env: Bindings, matchId: string, fields: Record<
   if (rowIdx < 0) throw new Error(`Match "${matchId}" not found in matches sheet`)
   const rowNum = rowIdx + 2
 
-  const data: { range: string; values: string[][] }[] = []
+  const data: { range: string; values: SheetCellValue[][] }[] = []
   for (const [fieldName, value] of Object.entries(fields)) {
     const colIdx = normalizedHeaders.indexOf(fieldName)
     if (colIdx < 0) throw new Error(`Column "${fieldName}" not found in matches sheet`)
@@ -2346,7 +2348,8 @@ app.put("/api/match/:matchId/schedule", async (c) => {
 
   const date = body.date?.trim() ?? ""
   const time = normalizeScheduleTime(body.time?.trim() ?? "")
-  if (!isValidScheduleDate(date)) {
+  const dateSerial = scheduleDateSerial(date)
+  if (dateSerial === null) {
     return c.json({ error: "date must be a valid YYYY-MM-DD value" }, 400)
   }
   if (!time) {
@@ -2356,7 +2359,7 @@ app.put("/api/match/:matchId/schedule", async (c) => {
   try {
     const match = await getMatchById(c.env, matchId)
     if (!match) return c.json({ error: "Match not found" }, 404)
-    await updateMatchFields(c.env, matchId, { date, time })
+    await updateMatchFields(c.env, matchId, { date: dateSerial, time })
     await appendAuditLog(
       c.env,
       sessionUser.username,

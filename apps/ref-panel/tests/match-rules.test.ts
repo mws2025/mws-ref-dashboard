@@ -22,6 +22,7 @@ import {
   normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
+  scheduleDateSerial,
 } from "../src/lib/match-rules.ts"
 
 describe("roll announcements", () => {
@@ -116,6 +117,8 @@ describe("referee input and lobby formatting", () => {
     expect(normalizeScheduleTime("24:00")).toBeNull()
     expect(isValidScheduleDate("2026-09-01")).toBe(true)
     expect(isValidScheduleDate("2026-02-30")).toBe(false)
+    expect(scheduleDateSerial("1970-01-01")).toBe(25569)
+    expect(scheduleDateSerial("2026-02-30")).toBeNull()
   })
 
   test("accepts score and accuracy formatting", () => {

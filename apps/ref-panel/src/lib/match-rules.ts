@@ -68,6 +68,12 @@ export function isValidScheduleDate(value: string): boolean {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
+export function scheduleDateSerial(value: string): number | null {
+  if (!isValidScheduleDate(value)) return null
+  const [year, month, day] = value.split("-").map(Number)
+  return Date.UTC(year, month - 1, day) / 86_400_000 + 25_569
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null
