@@ -31,7 +31,7 @@ const BRACKET_SET = new Set<string>(MOD_BRACKETS)
  * is an explicit allowlist in code rather than anything inferred from the
  * sheet. Add a round here on the day it goes public.
  */
-export const PUBLISHED_STAGE_TABS: readonly string[] = ["Q"]
+export const PUBLISHED_STAGE_TABS: readonly string[] = ["Q", "RO32"]
 
 // ---------------------------------------------------------------------------
 // Settings tab — stage metadata
@@ -196,8 +196,28 @@ const P = {
   od: 12, // BG
   hp: 13, // BH
   mapId: 14, // BI  resolved numeric id
-  pooled: 15, // BJ  "pooled"
+  // BJ onward is NOT stable across stage tabs — Q carries "Pooled?"/"Aim/Tap?"
+  // there while RO32 carries is_custom_map/is_custom_song. Anything past BI is
+  // located by header text instead; see CUSTOM_FLAG_HEADERS.
 } as const
+
+/**
+ * Headers marking a map as tournament-made, read from the block's header row
+ * (row 2) rather than a fixed offset — see the note in `P` above.
+ *
+ * A tab that predates these columns (Qualifiers) simply has neither, and every
+ * map on it reads as not-custom. Positional reading would instead have landed
+ * on Q's "Pooled?" column and treated its contents as a flag.
+ */
+const CUSTOM_FLAG_HEADERS = {
+  /** Difficulty mapped for the tournament. */
+  isCustomMap: "is_custom_map",
+  /** Original song written for the tournament ("MWS ORIGINAL"). */
+  isCustomSong: "is_custom_song",
+} as const
+
+/** "TRUE" -> true. Anything else (including "pooled" or a blank) -> false. */
+const sheetBool = (raw: string): boolean => raw.trim().toUpperCase() === "TRUE"
 
 export type MappoolMap = {
   slot: string // "NM1"
@@ -224,6 +244,10 @@ export type MappoolMap = {
   beatmapsetId: number | null
   coverUrl: string | null
   listUrl: string | null
+  /** Difficulty mapped for the tournament. False on tabs without the column. */
+  isCustomMap: boolean
+  /** Original song written for the tournament. False on tabs without it. */
+  isCustomSong: boolean
 }
 
 /** Extract a beatmap id from either a bare id or an osu! URL. */
@@ -305,7 +329,15 @@ export function parseStagePool(
 ): MappoolMap[] {
   const maps: MappoolMap[] = []
 
-  // Row 2 is the header; maps start at row 3 (index 2).
+  // Row 2 is the header. The custom-map flags sit past the positionally stable
+  // columns, so find them by name here; -1 means the tab has no such column.
+  const header = (values[1] ?? []).map((h) => h.trim().toLowerCase())
+  const flagCol = {
+    isCustomMap: header.indexOf(CUSTOM_FLAG_HEADERS.isCustomMap),
+    isCustomSong: header.indexOf(CUSTOM_FLAG_HEADERS.isCustomSong),
+  }
+
+  // Maps start at row 3 (index 2).
   values.slice(2).forEach((row, i) => {
     const rawMod = cell(row, P.mod)
     const rawNumber = cell(row, P.slotNumber)
@@ -360,6 +392,11 @@ export function parseStagePool(
       beatmapsetId: null,
       coverUrl: null,
       listUrl: null,
+      isCustomMap:
+        flagCol.isCustomMap !== -1 && sheetBool(cell(row, flagCol.isCustomMap)),
+      isCustomSong:
+        flagCol.isCustomSong !== -1 &&
+        sheetBool(cell(row, flagCol.isCustomSong)),
     })
   })
 
