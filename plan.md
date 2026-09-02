@@ -184,15 +184,15 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `POST /api/match/:id/forfeit` — sets status=forfeit, winner, score=-1 in matches sheet.
 
 ### Match Flow Engine
-- [x] Actual phase order modeled in `match_state`: lobby → roll → order choice → home mods → bans → craft recipes → pick → play → score/ingredients → repeat → ready result → completed.
+- [x] Actual phase order modeled in `match_state`: lobby → roll → order choice → bans → home mods → craft recipes → pick → play → score/ingredients → repeat → ready result → completed.
 - [x] `GET /api/match/:id/state` returns persisted flow state with sane default.
 - [x] `POST /api/match/:id/state` stores rolls, order choice, and home mod choices.
 - [x] `POST /api/match/:id/action` enforces ban/pick phase + expected player before writing map actions.
 - [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column.
 - [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
-- [x] Ban state uses the latest row per slot and enforces an absolute four-ban maximum, including Beignets and manual actions.
+- [x] Ban state uses the latest row per slot; RO32 has one base ban per player, later rounds have two, and Beignets can add its explicit extra ban up to the four-ban ceiling.
 - [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
-- [x] `POST /api/match/:id/score` atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
+- [x] `POST /api/match/:id/score` normalizes HD scores by 1.06, resolves PS3 by lower miss count, and atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
 - [x] BanchoBot finish messages auto-fill score entry; refs can persist absolute star corrections with `POST /api/match/:id/match-score`.
 - [x] Completed map slots can be repicked as additional history rows; TB is restricted to mutual match point unless Caramel unlocks the wildcard.
 - [x] Home-mod pools award one bonus ingredient to their owner on either a win or loss.
@@ -202,6 +202,8 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
 - [x] All 24 recipe definitions match the reference costs/effects; duplicate Cinnamon Roll labels are distinguished by action.
 - [x] Recipe effects modify map commands, lobby mods, score resolution, replay flow, inventory rewards, bans, and protection.
+- [x] Every non-Freemod map allows optional HD through `!mp allowed_mods HD`; Sugar Cookies excludes HT while Custard retains it.
+- [x] Score announcements include both inventories, and a deciding score names the winner with GGWP without starting another timer.
 - [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.
 

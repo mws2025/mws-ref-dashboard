@@ -2,16 +2,20 @@ import { describe, expect, test } from "bun:test"
 import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
+  baseBanLimitForRound,
   canClaimRefereeAssignment,
+  compareMapResults,
   formatScheduleTimeInput,
   formatLobbyTitle,
   homeModIngredientAwards,
   isBanLimitReached,
   isValidScheduleDate,
   isTiebreakerReady,
+  isMissCountWinCondition,
   lobbyInviteTarget,
   lobbyModsForPool,
   nextPlayerAfterPick,
+  normalizeHdScore,
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
@@ -69,6 +73,24 @@ describe("match progression", () => {
     expect(isBanLimitReached(3)).toBe(false)
     expect(isBanLimitReached(4)).toBe(true)
     expect(isBanLimitReached(5)).toBe(true)
+  })
+
+  test("limits RO32 to one base ban per player", () => {
+    expect(baseBanLimitForRound("RO32")).toBe(2)
+    expect(baseBanLimitForRound("Round of 32")).toBe(2)
+    expect(baseBanLimitForRound("RO16")).toBe(4)
+    expect(isBanLimitReached(2, baseBanLimitForRound("RO32"))).toBe(true)
+  })
+
+  test("normalizes HD scores and identifies the PS3 miss-count map", () => {
+    expect(normalizeHdScore(1_060_000, true)).toBe(1_000_000)
+    expect(normalizeHdScore(1_060_000, false)).toBe(1_060_000)
+    expect(isMissCountWinCondition("ps3")).toBe(true)
+    expect(isMissCountWinCondition("PS2")).toBe(false)
+    expect(compareMapResults("PS3", 800_000, 900_000, 0, 1)).toBe(1)
+    expect(compareMapResults("PS3", 900_000, 800_000, 2, 1)).toBe(-1)
+    expect(compareMapResults("PS3", 900_000, 800_000, 1, 1)).toBe(0)
+    expect(compareMapResults("PS3", 900_000, 800_000)).toBeNull()
   })
 
   test("awards one home ingredient on a loss and two on a win", () => {

@@ -3,8 +3,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
-import { isValidRoll, parseScoreValue } from "@/lib/match-rules"
-import type { MatchFlowState, PoolMap } from "@/types"
+import { isMissCountWinCondition, isValidRoll, parseScoreValue } from "@/lib/match-rules"
+import type { MatchFlowState, PoolMap, ScoreSubmissionDetails } from "@/types"
 
 interface Props {
   state: MatchFlowState | null
@@ -24,7 +24,7 @@ interface Props {
   scoreSubmitting?: boolean
   detectedScores?: { a?: number; b?: number; run: number }
   accuracyMode?: boolean
-  onSubmitScore: (slot: string, scoreA: number, scoreB: number) => void
+  onSubmitScore: (slot: string, scoreA: number, scoreB: number, details: ScoreSubmissionDetails) => void
 }
 
 const PHASE_LABEL: Record<MatchFlowState["phase"], string> = {
@@ -71,7 +71,15 @@ export function FlowPanel({
       ? mappool.find((map) => map.slot === state.currentSlot) ?? null
       : mappool.find((map) => map.status === "picked") ?? null
   const currentSlotKey = currentMap ? `${currentMap.slot}:${detectedScores?.run ?? 0}` : ""
-  const [scoreEntry, setScoreEntry] = useState<{ slot: string; a?: string; b?: string }>({ slot: "" })
+  const [scoreEntry, setScoreEntry] = useState<{
+    slot: string
+    a?: string
+    b?: string
+    usesHdA?: boolean
+    usesHdB?: boolean
+    missCountA?: string
+    missCountB?: string
+  }>({ slot: "" })
   const [rollEntry, setRollEntry] = useState<{ a?: string; b?: string }>({})
 
   if (!state) {
@@ -95,10 +103,19 @@ export function FlowPanel({
     : detectedScores?.b?.toString() ?? ""
   const parsedScoreA = parseScoreValue(scoreInputA)
   const parsedScoreB = parseScoreValue(scoreInputB)
+  const missCountMode = Boolean(currentMap && isMissCountWinCondition(currentMap.slot))
+  const missCountInputA = scoreEntry.slot === currentSlotKey ? scoreEntry.missCountA ?? "" : ""
+  const missCountInputB = scoreEntry.slot === currentSlotKey ? scoreEntry.missCountB ?? "" : ""
+  const parsedMissCountA = parseScoreValue(missCountInputA)
+  const parsedMissCountB = parseScoreValue(missCountInputB)
+  const validMissCounts = !missCountMode || (
+    parsedMissCountA !== null && Number.isInteger(parsedMissCountA) &&
+    parsedMissCountB !== null && Number.isInteger(parsedMissCountB)
+  )
   const scoresWithinRange = !accuracyMode || (
     parsedScoreA !== null && parsedScoreB !== null && parsedScoreA <= 100 && parsedScoreB <= 100
   )
-  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange
+  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange && validMissCounts
 
   return (
     <div className="space-y-4">
@@ -238,7 +255,7 @@ export function FlowPanel({
               <span className="text-[10px] text-muted-foreground">{playerA}</span>
               <Input
                 value={scoreInputA}
-                onChange={(event) => setScoreEntry({ slot: currentSlotKey, a: event.target.value, b: scoreInputB })}
+                onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, a: event.target.value, b: scoreInputB }))}
                 inputMode={accuracyMode ? "decimal" : "numeric"}
                 placeholder={accuracyMode ? "98.76%" : "987432"}
               />
@@ -247,12 +264,62 @@ export function FlowPanel({
               <span className="text-[10px] text-muted-foreground">{playerB}</span>
               <Input
                 value={scoreInputB}
-                onChange={(event) => setScoreEntry({ slot: currentSlotKey, a: scoreInputA, b: event.target.value })}
+                onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, a: scoreInputA, b: event.target.value }))}
                 inputMode={accuracyMode ? "decimal" : "numeric"}
                 placeholder={accuracyMode ? "97.54%" : "854201"}
               />
             </label>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              [playerA, "usesHdA"],
+              [playerB, "usesHdB"],
+            ] as const).map(([player, key]) => (
+              <label key={key} className="flex items-center justify-between rounded-md border border-border/60 px-2.5 py-2 text-xs">
+                <span>{player} used HD</span>
+                <Switch
+                  checked={scoreEntry.slot === currentSlotKey && Boolean(scoreEntry[key])}
+                  onCheckedChange={(checked) => setScoreEntry((current) => ({
+                    ...current,
+                    slot: currentSlotKey,
+                    [key]: checked,
+                  }))}
+                  aria-label={`${player} used HD`}
+                />
+              </label>
+            ))}
+          </div>
+          {missCountMode && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">PS3 uses lower miss count. A tied miss count requires a replay.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1">
+                  <span className="text-[10px] text-muted-foreground">{playerA} misses</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={missCountInputA}
+                    onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, missCountA: event.target.value }))}
+                    placeholder="0"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[10px] text-muted-foreground">{playerB} misses</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={missCountInputB}
+                    onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, missCountB: event.target.value }))}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
           {accuracyMode && !scoresWithinRange && (
             <p className="text-xs text-destructive">Accuracy must be between 0% and 100%.</p>
           )}
@@ -260,7 +327,18 @@ export function FlowPanel({
             size="sm"
             className="w-full text-xs"
             disabled={!canSubmitScore || scoreSubmitting}
-            onClick={() => currentMap && parsedScoreA !== null && parsedScoreB !== null && onSubmitScore(currentMap.slot, parsedScoreA, parsedScoreB)}
+            onClick={() => currentMap && parsedScoreA !== null && parsedScoreB !== null && onSubmitScore(
+              currentMap.slot,
+              parsedScoreA,
+              parsedScoreB,
+              {
+                usesHdA: scoreEntry.slot === currentSlotKey && Boolean(scoreEntry.usesHdA),
+                usesHdB: scoreEntry.slot === currentSlotKey && Boolean(scoreEntry.usesHdB),
+                ...(missCountMode && parsedMissCountA !== null && parsedMissCountB !== null
+                  ? { missCountA: parsedMissCountA, missCountB: parsedMissCountB }
+                  : {}),
+              },
+            )}
           >
             {scoreSubmitting ? "Submitting..." : "Submit scores"}
           </Button>

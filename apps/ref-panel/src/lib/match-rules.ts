@@ -9,9 +9,15 @@ export type FinishedScoreAnnouncement = {
 }
 
 export const MAX_MATCH_BANS = 4
+export const HD_SCORE_MULTIPLIER = 1.06
 
-export function isBanLimitReached(currentBans: number): boolean {
-  return currentBans >= MAX_MATCH_BANS
+export function baseBanLimitForRound(round: string): number {
+  const normalized = round.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
+  return normalized === "ro32" || normalized === "roundof32" ? 2 : MAX_MATCH_BANS
+}
+
+export function isBanLimitReached(currentBans: number, limit = MAX_MATCH_BANS): boolean {
+  return currentBans >= limit
 }
 
 export function refereeAssignments(value?: string): string[] {
@@ -135,6 +141,29 @@ export function parseScoreValue(value: string | number): number | null {
   if (cleaned === "") return null
   const normalized = typeof value === "number" ? value : Number(cleaned)
   return Number.isFinite(normalized) && normalized >= 0 ? normalized : null
+}
+
+export function normalizeHdScore(score: number, usesHd: boolean): number {
+  return usesHd ? Math.round(score / HD_SCORE_MULTIPLIER) : score
+}
+
+export function isMissCountWinCondition(slot: string): boolean {
+  return slot.trim().toUpperCase() === "PS3"
+}
+
+export function compareMapResults(
+  slot: string,
+  scoreA: number,
+  scoreB: number,
+  missCountA?: number | null,
+  missCountB?: number | null,
+): number | null {
+  if (!isMissCountWinCondition(slot)) return Math.sign(scoreA - scoreB)
+  if (
+    !Number.isInteger(missCountA) || !Number.isInteger(missCountB) ||
+    (missCountA ?? -1) < 0 || (missCountB ?? -1) < 0
+  ) return null
+  return Math.sign((missCountB ?? 0) - (missCountA ?? 0))
 }
 
 export function formatLobbyTitle(abbreviation: string, playerA: string, playerB: string): string {

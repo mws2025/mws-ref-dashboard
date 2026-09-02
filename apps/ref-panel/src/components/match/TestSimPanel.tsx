@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import type { MatchFlowState, TestMpBinding, TestMpProbe, TestMpResult } from "@/types"
+import type { MatchFlowState, ScoreSubmissionDetails, TestMpBinding, TestMpProbe, TestMpResult } from "@/types"
 
 interface ScoreSubmitOutcome {
   replayRequired: boolean
@@ -23,7 +23,7 @@ interface Props {
   scoreSubmitting: boolean
   onBindingChange: (binding: TestMpBinding | undefined) => void
   onLobbyChange: (lobbyUrl: string) => void
-  onApplyScore: (slot: string, scoreA: number, scoreB: number) => Promise<ScoreSubmitOutcome | null>
+  onApplyScore: (slot: string, scoreA: number, scoreB: number, details: ScoreSubmissionDetails) => Promise<ScoreSubmitOutcome | null>
 }
 
 function apiError(value: unknown, fallback: string): string {
@@ -173,7 +173,13 @@ export function TestSimPanel({
     if (!result?.canApply || !slot || scoreA == null || scoreB == null) return
     setBusy("apply")
     try {
-      const outcome = await onApplyScore(slot, scoreA, scoreB)
+      const outcome = await onApplyScore(slot, scoreA, scoreB, {
+        usesHdA: result.values?.usesHdA ?? false,
+        usesHdB: result.values?.usesHdB ?? false,
+        ...(result.values?.missCountMode && result.values.missCountA !== null && result.values.missCountB !== null
+          ? { missCountA: result.values.missCountA, missCountB: result.values.missCountB }
+          : {}),
+      })
       if (!outcome) return
       if (await consumeGame(outcome.replayRequired)) {
         toast.success(outcome.replayRequired ? "Verified run applied; replay remains open" : "Verified osu! result applied")
@@ -293,8 +299,16 @@ export function TestSimPanel({
               </div>
               {result.values && (
                 <div className="grid grid-cols-2 gap-2 border-t border-border/60 pt-2 text-xs">
-                  <div><p className="text-[10px] text-muted-foreground">{playerA}</p><p className="font-mono">{result.values.scoreA ?? "missing"}{result.values.accuracyMode ? "%" : ""}</p></div>
-                  <div><p className="text-[10px] text-muted-foreground">{playerB}</p><p className="font-mono">{result.values.scoreB ?? "missing"}{result.values.accuracyMode ? "%" : ""}</p></div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">{playerA}</p>
+                    <p className="font-mono">{result.values.scoreA ?? "missing"}{result.values.accuracyMode ? "%" : ""}{result.values.usesHdA ? " HD" : ""}</p>
+                    {result.values.missCountMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.missCountA ?? "missing"} misses</p>}
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground">{playerB}</p>
+                    <p className="font-mono">{result.values.scoreB ?? "missing"}{result.values.accuracyMode ? "%" : ""}{result.values.usesHdB ? " HD" : ""}</p>
+                    {result.values.missCountMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.missCountB ?? "missing"} misses</p>}
+                  </div>
                 </div>
               )}
               <div className="grid grid-cols-[1fr_auto] gap-2">

@@ -50,6 +50,13 @@ export interface RecipeActivation {
   rewardIngredients?: [IngKey, IngKey]
 }
 
+export interface ScoreSubmissionDetails {
+  usesHdA: boolean
+  usesHdB: boolean
+  missCountA?: number
+  missCountB?: number
+}
+
 export interface RecipeEvent {
   id: string
   player: string
@@ -144,6 +151,11 @@ export interface TestMpResult {
     scoreA: number | null
     scoreB: number | null
     accuracyMode: boolean
+    usesHdA: boolean
+    usesHdB: boolean
+    missCountA: number | null
+    missCountB: number | null
+    missCountMode: boolean
   }
 }
 

@@ -7,6 +7,7 @@ import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
 import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import {
+  baseBanLimitForRound,
   formatLobbyTitle,
   isBanLimitReached,
   isTiebreakerReady,
@@ -24,6 +25,7 @@ import type {
   PoolMap,
   RecipeActivation,
   RecipeEvent,
+  ScoreSubmissionDetails,
 } from "@/types"
 import { LiveBadge } from "../LiveBadge"
 import { FlowPanel } from "./FlowPanel"
@@ -39,6 +41,7 @@ type EventKind = "join" | "leave" | "roll" | "score" | "map" | "start" | "abort"
 interface RecipePickSetup {
   eventIds: string[]
   mods: string
+  allowedMods: string[]
   commandsBefore: string[]
   notices: string[]
   beatmapId?: string
@@ -192,7 +195,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const stateActionQueue = useRef<Promise<void>>(Promise.resolve())
   const stateActionVersion = useRef(0)
   const flowStateRef = useRef<MatchFlowState | null>(null)
-  flowStateRef.current = flowState
+  useEffect(() => {
+    flowStateRef.current = flowState
+  }, [flowState])
 
   function scheduleInvSave(player: "a" | "b", playerName: string, inv: Inventory) {
     const existing = invSaveTimers.current[player]
@@ -347,10 +352,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     const firstBanner = choice === "ban_first" ? chooser : other
     const nextState: MatchFlowState = {
       ...current,
-      phase: "home_mod",
+      phase: "ban",
       firstPicker,
       firstBanner,
-      turnPlayer: firstPicker,
+      turnPlayer: firstBanner,
       updatedAt: new Date().toISOString(),
     }
     postStateAction({ action: "choose_order", choice }, nextState)
@@ -367,7 +372,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     const other = opponentOf(player, match.playerA, match.playerB)
     const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? next.homeModA : next.homeModB
     const nextState: MatchFlowState = otherHasHomeMod
-      ? { ...next, phase: "ban", turnPlayer: next.firstBanner }
+      ? { ...next, phase: "craft", turnPlayer: next.firstPicker }
       : { ...next, phase: "home_mod", turnPlayer: other }
     postStateAction({ action: "set_home_mod", player, homeMod }, nextState)
   }
@@ -377,11 +382,11 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     if (action === "ban") {
       const firstBanner = flowState.firstBanner ?? player
       const secondBanner = opponentOf(firstBanner, match.playerA, match.playerB)
-      const order = orderedPlayersFromPattern(banOrder, firstBanner, secondBanner).slice(0, MAX_MATCH_BANS)
+      const order = orderedPlayersFromPattern(banOrder, firstBanner, secondBanner).slice(0, baseBanLimitForRound(match.round))
       const completedBans = (liveMappool?.filter((map) => map.status === "banned").length ?? 0) + 1
       setFlowState({
         ...flowState,
-        phase: completedBans < order.length ? "ban" : "craft",
+        phase: completedBans < order.length ? "ban" : "home_mod",
         turnPlayer: completedBans < order.length ? order[completedBans] : flowState.firstPicker,
         currentSlot: undefined,
         updatedAt: new Date().toISOString(),
@@ -407,19 +412,26 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   function announceGameResult(scoreA: number, scoreB: number, nextPicker: string, inventories?: { a: Inventory; b: Inventory }) {
     const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
     const matchOver = scoreA >= winsNeeded || scoreB >= winsNeeded
-    ircRef.current?.send(`${match.playerA} | ${scoreA} - ${scoreB} | ${match.playerB}`)
-    if (inventories) {
-      const formatInventory = (inventory: Inventory) =>
-        `Egg ${inventory.egg}, Sugar ${inventory.sugar}, Butter ${inventory.butter}, Flour ${inventory.flour}, Milk ${inventory.milk}`
-      setTimeout(() => ircRef.current?.send(`${match.playerA}: ${formatInventory(inventories.a)} | ${match.playerB}: ${formatInventory(inventories.b)}`), 600)
-    }
+    const formatInventory = (inventory: Inventory) =>
+      `E${inventory.egg} S${inventory.sugar} B${inventory.butter} F${inventory.flour} M${inventory.milk}`
+    const inventoryText = inventories
+      ? ` // Ingredients: ${match.playerA} [${formatInventory(inventories.a)}] | ${match.playerB} [${formatInventory(inventories.b)}]`
+      : ""
+    const winner = scoreA > scoreB ? match.playerA : match.playerB
+    const resultText = `Score: ${match.playerA} ${scoreA} - ${scoreB} ${match.playerB}${inventoryText}`
+    ircRef.current?.send(matchOver ? `${resultText} // ${winner} won! GGWP!` : resultText)
     if (!matchOver) {
-      setTimeout(() => ircRef.current?.send(`Next to pick: ${nextPicker}`), inventories ? 1200 : 600)
-      setTimeout(() => ircRef.current?.send(`!mp timer 120`), inventories ? 1800 : 1200)
+      setTimeout(() => ircRef.current?.send(`Next to pick: ${nextPicker}`), 600)
+      setTimeout(() => ircRef.current?.send(`!mp timer 120`), 1200)
     }
   }
 
-  async function submitScore(slot: string, scoreA: number, scoreB: number): Promise<ScoreSubmitOutcome | null> {
+  async function submitScore(
+    slot: string,
+    scoreA: number,
+    scoreB: number,
+    details: ScoreSubmissionDetails = { usesHdA: false, usesHdB: false },
+  ): Promise<ScoreSubmitOutcome | null> {
     if (scoreSubmitting) return null
     setScoreSubmitting(true)
     try {
@@ -427,7 +439,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slot, scoreA, scoreB, playerA: match.playerA, playerB: match.playerB }),
+        body: JSON.stringify({ slot, scoreA, scoreB, ...details, playerA: match.playerA, playerB: match.playerB }),
       })
       if (!res.ok) {
         const err = await res.json() as { error?: string }
@@ -654,6 +666,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
     for (const command of recipeSetup?.commandsBefore ?? []) await sendIrc(channel, command)
     await sendIrc(channel, `!mp mods ${recipeSetup?.mods || lobbyModsForPool(map.pool, enforceNF)}`)
+    const allowedMods = recipeSetup?.allowedMods ?? (["FM", "TB"].includes(map.pool) ? [] : ["HD"])
+    if (allowedMods.length > 0) await sendIrc(channel, `!mp allowed_mods ${allowedMods.join(" ")}`)
     for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
     await sendIrc(channel, "!mp timer 120")
   }
@@ -736,7 +750,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
 
   const tiebreakerReady = isTiebreakerReady(liveScoreA, liveScoreB, match.bestOf ?? 9)
   const activeBanCount = liveMappool?.filter((map) => map.status === "banned").length ?? 0
-  const banLimitReached = isBanLimitReached(activeBanCount)
+  const baseBanLimit = baseBanLimitForRound(match.round)
+  const banLimitReached = isBanLimitReached(activeBanCount, manualMapActions ? baseBanLimit : MAX_MATCH_BANS)
   const activeSlot = flowState?.currentSlot
   const accuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
     event.status === "active" &&
@@ -1074,7 +1089,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             : flowState?.currentSlot
               ? `Finish or unpick ${flowState.currentSlot} before choosing another map.`
             : banLimitReached && flowState?.phase === "ban"
-              ? `The ${MAX_MATCH_BANS}-ban maximum has been reached.`
+              ? `The ${baseBanLimit / 2}-ban-per-player maximum for ${match.round || "this round"} has been reached.`
             : manualMapActions
               ? "Manual order is on. Either player can pick, ban, or protect."
               : flowState?.phase === "ban" && flowState.turnPlayer

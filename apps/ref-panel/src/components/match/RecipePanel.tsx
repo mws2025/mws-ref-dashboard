@@ -24,6 +24,7 @@ import type {
 } from "@/types"
 
 const MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
+const SUGAR_COOKIE_MOD_CHOICES = MOD_CHOICES.filter((mod) => mod !== "HT")
 
 function isRecipeTimingOpen(phase: MatchFlowPhase | undefined, hasPickedMap: boolean, craftingDisabled: boolean): boolean {
   return phase === "craft" && !hasPickedMap && !craftingDisabled
@@ -276,7 +277,7 @@ export function RecipePanel({
               <span className="text-xs text-muted-foreground">Recipe mod</span>
               <NativeSelect value={activation.mod ?? ""} onChange={(mod) => setActivation((current) => ({ ...current, mod }))}>
                 <option value="">Select mod</option>
-                {MOD_CHOICES.map((mod) => <option key={mod} value={mod}>{mod}</option>)}
+                {SUGAR_COOKIE_MOD_CHOICES.map((mod) => <option key={mod} value={mod}>{mod}</option>)}
               </NativeSelect>
             </label>
           )}

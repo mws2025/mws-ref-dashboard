@@ -3,18 +3,21 @@ import { Hono, type Context } from "hono"
 import { handle } from "hono/cloudflare-pages"
 import { sign, verify } from "hono/jwt"
 import {
-  addLobbyMod,
+  baseBanLimitForRound,
   canClaimRefereeAssignment,
+  compareMapResults,
   formatLobbyMods,
   formatLobbyTitle,
   homeModIngredientAwards,
   isBanLimitReached,
+  isMissCountWinCondition,
   isValidScheduleDate,
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
+  normalizeHdScore,
   parseScoreValue,
   normalizeScheduleTime,
   refereeAssignments,
@@ -190,7 +193,7 @@ function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promise<Resp
 }
 
 type OsuMpUser = { id: number; username: string }
-type OsuMpScore = { userId: number; score: number; accuracy: number; mods: string[] }
+type OsuMpScore = { userId: number; score: number; accuracy: number; misses: number; mods: string[] }
 type OsuMpGame = {
   eventId: number
   id: number
@@ -271,11 +274,14 @@ function parseOsuMpMatch(value: unknown): OsuMpMatch {
       const userId = Number(score?.user_id)
       const value = Number(score?.score)
       const accuracy = Number(score?.accuracy)
+      const statistics = toRecord(score?.statistics)
+      const misses = Number(statistics?.count_miss ?? statistics?.miss ?? score?.count_miss ?? 0)
       return Number.isFinite(userId) && Number.isFinite(value)
         ? [{
             userId,
             score: value,
             accuracy: Number.isFinite(accuracy) ? accuracy : 0,
+            misses: Number.isFinite(misses) ? Math.max(0, Math.trunc(misses)) : 0,
             mods: normalizeOsuMods(score?.mods),
           }]
         : []
@@ -357,6 +363,7 @@ const ITEM_EVENT_HEADERS = [
   "resolution",
 ] as const
 const RECIPE_MOD_CHOICES = ["HD", "HR", "HT", "EZ", "FL", "SO"] as const
+const SUGAR_COOKIE_MOD_CHOICES = ["HD", "HR", "EZ", "FL", "SO"] as const
 const MAP_BOUND_EFFECTS = new Set([
   "mod_replace",
   "score_add",
@@ -1879,6 +1886,7 @@ function publicSnapshotRecipesForPlayer(
 type RecipePickSetup = {
   eventIds: string[]
   mods: string
+  allowedMods: string[]
   commandsBefore: string[]
   notices: string[]
   playerAMods: string[]
@@ -1922,6 +1930,7 @@ async function activateRecipesForPick(
 
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
   let mods = lobbyModsForPool(pool, enforceNF)
+  const allowedMods = new Set<string>(["HD"])
   const commandsBefore: string[] = []
   const notices: string[] = []
   let beatmapId: string | undefined
@@ -1940,21 +1949,30 @@ async function activateRecipesForPick(
     if (effectType === "mod_replace" && pool.toUpperCase() === "DT") {
       mods = formatLobbyMods(["NC"], enforceNF)
     } else if (effectType === "mod_add_self") {
-      mods = formatLobbyMods(["Freemod"], enforceNF)
       const selectedMod = String(payload.mod ?? "").toUpperCase()
-      if (selectedMod) extraPlayerMods.get(event.player.toLowerCase())?.add(selectedMod)
+      if (selectedMod) {
+        allowedMods.add(selectedMod)
+        extraPlayerMods.get(event.player.toLowerCase())?.add(selectedMod)
+      }
       notices.push(`${event.player} must use ${selectedMod}; the opponent must not add a recipe mod.`)
     } else if (effectType === "mod_add_both") {
-      mods = formatLobbyMods(["Freemod"], enforceNF)
       const modA = String(payload.modA ?? payload.mod ?? "").toUpperCase()
       const modB = String(payload.modB ?? payload.mod ?? "").toUpperCase()
-      if (modA) extraPlayerMods.get(playerA.toLowerCase())?.add(modA)
-      if (modB) extraPlayerMods.get(playerB.toLowerCase())?.add(modB)
+      if (modA) {
+        allowedMods.add(modA)
+        extraPlayerMods.get(playerA.toLowerCase())?.add(modA)
+      }
+      if (modB) {
+        allowedMods.add(modB)
+        extraPlayerMods.get(playerB.toLowerCase())?.add(modB)
+      }
       notices.push(`Both players must use their selected Custard mods: ${modA} / ${modB}.`)
     } else if (effectType === "mod_force_both") {
       const forcedMod = String(payload.mod ?? "").toUpperCase()
       if (forcedMod) {
-        mods = addLobbyMod(mods, forcedMod, enforceNF)
+        allowedMods.add(forcedMod)
+        extraPlayerMods.get(playerA.toLowerCase())?.add(forcedMod)
+        extraPlayerMods.get(playerB.toLowerCase())?.add(forcedMod)
         if (event.itemId === "item_11") notices.push("Quiche active: HD is forced for both players on this map.")
       }
     } else if (effectType === "accuracy_mode") {
@@ -1980,6 +1998,7 @@ async function activateRecipesForPick(
   return {
     eventIds: active.map((event) => event.id),
     mods,
+    allowedMods: mods.split(/\s+/).some((mod) => mod.toLowerCase() === "freemod") ? [] : [...allowedMods],
     commandsBefore,
     notices,
     playerAMods: requiredMods(playerA),
@@ -2671,7 +2690,16 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
         scoringType: game.scoringType,
       },
       checks,
-      values: { scoreA: scoreValue(scoreA), scoreB: scoreValue(scoreB), accuracyMode },
+      values: {
+        scoreA: scoreValue(scoreA),
+        scoreB: scoreValue(scoreB),
+        accuracyMode,
+        usesHdA: actualPlayerAMods.has("HD"),
+        usesHdB: actualPlayerBMods.has("HD"),
+        missCountA: scoreA?.misses ?? null,
+        missCountB: scoreB?.misses ?? null,
+        missCountMode: isMissCountWinCondition(binding.expected.slot),
+      },
     })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Failed to verify osu! game" }, 502)
@@ -2756,7 +2784,7 @@ app.post("/api/match/:matchId/state", async (c) => {
       const other = opponentOf(chooser, match.playerA, match.playerB)
       const firstPicker = choice === "pick_first" ? chooser : other
       const firstBanner = choice === "ban_first" ? chooser : other
-      nextState = { ...state, phase: "home_mod", firstPicker, firstBanner, turnPlayer: firstPicker }
+      nextState = { ...state, phase: "ban", firstPicker, firstBanner, turnPlayer: firstBanner }
     } else if (action === "set_home_mod") {
       const player = typeof body.player === "string" ? body.player.trim() : ""
       const homeMod = normalizeHomeMod(body.homeMod)
@@ -2774,19 +2802,19 @@ app.post("/api/match/:matchId/state", async (c) => {
           turnPlayer: player,
         }
       } else {
-      if (state.phase !== "home_mod") return c.json({ error: "Home mods are not open right now" }, 409)
-      if (state.turnPlayer && state.turnPlayer.toLowerCase() !== player.toLowerCase()) {
-        return c.json({ error: `${state.turnPlayer} must choose home mod next` }, 409)
-      }
-      const isA = player.toLowerCase() === match.playerA.toLowerCase()
-      const updated: MatchFlowState = { ...state, ...(isA ? { homeModA: homeMod } : { homeModB: homeMod }) }
-      const other = opponentOf(player, match.playerA, match.playerB)
-      const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? updated.homeModA : updated.homeModB
-      if (!otherHasHomeMod) {
-        nextState = { ...updated, phase: "home_mod", turnPlayer: other }
-      } else {
-        nextState = { ...updated, phase: "ban", turnPlayer: updated.firstBanner }
-      }
+        if (state.phase !== "home_mod") return c.json({ error: "Home mods are not open right now" }, 409)
+        if (state.turnPlayer && state.turnPlayer.toLowerCase() !== player.toLowerCase()) {
+          return c.json({ error: `${state.turnPlayer} must choose home mod next` }, 409)
+        }
+        const isA = player.toLowerCase() === match.playerA.toLowerCase()
+        const updated: MatchFlowState = { ...state, ...(isA ? { homeModA: homeMod } : { homeModB: homeMod }) }
+        const other = opponentOf(player, match.playerA, match.playerB)
+        const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? updated.homeModA : updated.homeModB
+        if (!otherHasHomeMod) {
+          nextState = { ...updated, phase: "home_mod", turnPlayer: other }
+        } else {
+          nextState = { ...updated, phase: "craft", turnPlayer: updated.firstPicker }
+        }
       }
     } else {
       return c.json({ error: "Unknown state action" }, 400)
@@ -2988,6 +3016,15 @@ app.post("/api/match/:matchId/score", async (c) => {
   const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
   const rawScoreA = typeof body.scoreA === "string" || typeof body.scoreA === "number" ? parseScoreValue(body.scoreA) : null
   const rawScoreB = typeof body.scoreB === "string" || typeof body.scoreB === "number" ? parseScoreValue(body.scoreB) : null
+  const usesHdA = body.usesHdA === true || body.hdA === true
+  const usesHdB = body.usesHdB === true || body.hdB === true
+  const parsedMissCount = (value: unknown): number | null => {
+    if (value === undefined || value === null || value === "") return null
+    const parsed = Number(value)
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+  }
+  const missCountA = parsedMissCount(body.missCountA)
+  const missCountB = parsedMissCount(body.missCountB)
   if (!slot || !playerA || !playerB || rawScoreA === null || rawScoreB === null) {
     return c.json({ error: "slot, playerA, playerB, scoreA, and scoreB required" }, 400)
   }
@@ -3118,13 +3155,23 @@ app.post("/api/match/:matchId/score", async (c) => {
       ...itemPayload(itemForEvent(items, event) ?? {}),
       ...event.payload,
     })
-    if (activeEvents.some((event) => effect(event) === "accuracy_mode") && (rawScoreA > 100 || rawScoreB > 100)) {
+    const accuracyMode = activeEvents.some((event) => effect(event) === "accuracy_mode")
+    const missCountMode = isMissCountWinCondition(slot)
+    if (accuracyMode && (rawScoreA > 100 || rawScoreB > 100)) {
       return c.json({ error: "Accuracy values must be between 0% and 100%" }, 400)
     }
+    if (missCountMode && (missCountA === null || missCountB === null)) {
+      return c.json({ error: "PS3 requires a nonnegative whole-number miss count for both players" }, 400)
+    }
 
-    const applyScoreEffects = (inputA: number, inputB: number): { scoreA: number; scoreB: number } => {
-      let scoreA = inputA
-      let scoreB = inputB
+    const applyScoreEffects = (
+      inputA: number,
+      inputB: number,
+      inputUsesHdA: boolean,
+      inputUsesHdB: boolean,
+    ): { scoreA: number; scoreB: number } => {
+      let scoreA = accuracyMode ? inputA : normalizeHdScore(inputA, inputUsesHdA)
+      let scoreB = accuracyMode ? inputB : normalizeHdScore(inputB, inputUsesHdB)
       for (const event of activeEvents) {
         if (effect(event) !== "score_add") continue
         const amount = Number(payloadFor(event).amount) || 0
@@ -3140,7 +3187,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       return { scoreA, scoreB }
     }
 
-    const currentAdjusted = applyScoreEffects(rawScoreA, rawScoreB)
+    const currentAdjusted = applyScoreEffects(rawScoreA, rawScoreB, usesHdA, usesHdB)
     const replayEvents = activeEvents.filter((event) =>
       effect(event) === "replay_top_score" || effect(event) === "conditional_replay"
     )
@@ -3168,7 +3215,7 @@ app.post("/api/match/:matchId/score", async (c) => {
             activated_at: event.activatedAt || now,
             resolution: JSON.stringify({
               ...event.resolution,
-              firstRun: { scoreA: rawScoreA, scoreB: rawScoreB },
+              firstRun: { scoreA: rawScoreA, scoreB: rawScoreB, usesHdA, usesHdB, missCountA, missCountB },
               replayReason: effect(event),
             }),
           }
@@ -3192,23 +3239,43 @@ app.post("/api/match/:matchId/score", async (c) => {
 
     let scoreA = currentAdjusted.scoreA
     let scoreB = currentAdjusted.scoreB
+    let finalMissCountA = missCountA
+    let finalMissCountB = missCountB
     if (storedReplay && bananaBreadActive) {
-      const firstAdjusted = applyScoreEffects(Number(storedReplay.scoreA), Number(storedReplay.scoreB))
+      const firstAdjusted = applyScoreEffects(
+        Number(storedReplay.scoreA),
+        Number(storedReplay.scoreB),
+        storedReplay.usesHdA === true,
+        storedReplay.usesHdB === true,
+      )
       scoreA = Math.max(firstAdjusted.scoreA, currentAdjusted.scoreA)
       scoreB = Math.max(firstAdjusted.scoreB, currentAdjusted.scoreB)
+      if (missCountMode) {
+        const firstMissCountA = parsedMissCount(storedReplay.missCountA)
+        const firstMissCountB = parsedMissCount(storedReplay.missCountB)
+        if (firstMissCountA !== null && finalMissCountA !== null) finalMissCountA = Math.min(firstMissCountA, finalMissCountA)
+        if (firstMissCountB !== null && finalMissCountB !== null) finalMissCountB = Math.min(firstMissCountB, finalMissCountB)
+      }
     }
-    if (scoreA === scoreB) {
+    const resultComparison = compareMapResults(slot, scoreA, scoreB, finalMissCountA, finalMissCountB)
+    if (resultComparison === null) {
+      return c.json({ error: "The map result is missing required win-condition values" }, 400)
+    }
+    if (resultComparison === 0) {
       return c.json({
         ok: true,
         replayRequired: true,
         slot,
         rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
         adjustedScores: { scoreA, scoreB },
+        missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
         state: flowBefore,
-        notices: ["Scores are tied. Replay this map and submit the next result."],
+        notices: [missCountMode
+          ? "PS3 miss counts are tied. Replay this map and submit the next result."
+          : "Scores are tied. Replay this map and submit the next result."],
       })
     }
-    const winner = scoreA > scoreB ? playerA : playerB
+    const winner = resultComparison > 0 ? playerA : playerB
     const loser = samePlayer(winner, playerA) ? playerB : playerA
     const margin = Math.abs(scoreA - scoreB)
 
@@ -3274,6 +3341,8 @@ app.post("/api/match/:matchId/score", async (c) => {
         slot,
         rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
         finalScores: { scoreA, scoreB },
+        hd: { playerA: usesHdA, playerB: usesHdB },
+        missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
         winner,
       }
 
@@ -3420,7 +3489,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       "match_map",
       `${matchId}:${slot}`,
       beforeJson,
-      JSON.stringify({ slot, rawScoreA, rawScoreB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
+      JSON.stringify({ slot, rawScoreA, rawScoreB, usesHdA, usesHdB, missCountA: finalMissCountA, missCountB: finalMissCountB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
     ).catch(() => {})
 
     return c.json({
@@ -3428,6 +3497,14 @@ app.post("/api/match/:matchId/score", async (c) => {
       slot,
       scoreA,
       scoreB,
+      rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
+      normalizedScores: {
+        scoreA: accuracyMode ? rawScoreA : normalizeHdScore(rawScoreA, usesHdA),
+        scoreB: accuracyMode ? rawScoreB : normalizeHdScore(rawScoreB, usesHdB),
+      },
+      hd: { playerA: usesHdA, playerB: usesHdB },
+      winCondition: missCountMode ? "miss_count" : accuracyMode ? "accuracy" : "score",
+      missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
       winner,
       totals,
       pool,
@@ -3754,8 +3831,8 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       ? body.mod.trim().toUpperCase()
       : String(effectPayload.mod ?? "").toUpperCase()
     if (effectType === "mod_add_self") {
-      if (!RECIPE_MOD_CHOICES.includes(mod as typeof RECIPE_MOD_CHOICES[number])) {
-        return c.json({ error: `mod must be one of ${RECIPE_MOD_CHOICES.join(", ")}` }, 400)
+      if (!SUGAR_COOKIE_MOD_CHOICES.includes(mod as typeof SUGAR_COOKIE_MOD_CHOICES[number])) {
+        return c.json({ error: `mod must be one of ${SUGAR_COOKIE_MOD_CHOICES.join(", ")}` }, 400)
       }
       activationPayload.mod = mod
     }
@@ -4854,8 +4931,10 @@ app.post("/api/match/:matchId/action", async (c) => {
     if (action === "ban" && existingStatus === "protected") {
       return c.json({ error: `${slot} is protected and cannot be banned` }, 409)
     }
-    if (action === "ban" && isBanLimitReached(activeBanCount)) {
-      return c.json({ error: `A match cannot have more than ${MAX_MATCH_BANS} bans` }, 409)
+    const baseBanLimit = baseBanLimitForRound(match.round)
+    const actionBanLimit = manualOrder ? baseBanLimit : MAX_MATCH_BANS
+    if (action === "ban" && isBanLimitReached(activeBanCount, actionBanLimit)) {
+      return c.json({ error: `${match.round || "This round"} allows ${baseBanLimit / 2} base ban(s) per player` }, 409)
     }
     if (action === "ban" && ["banned", "picked", "in-progress", "completed"].includes(existingStatus)) {
       return c.json({ error: `${slot} is not available to ban` }, 409)
@@ -5010,10 +5089,10 @@ app.post("/api/match/:matchId/action", async (c) => {
         actionCfgMap.get("ban order") ?? DEFAULT_BAN_ORDER,
         firstBanner,
         secondBanner,
-      ).slice(0, MAX_MATCH_BANS)
+      ).slice(0, baseBanLimit)
       if (extraBan) {
         // Beignets grants the acting player one immediate additional ban.
-      } else if (completedBans < Math.min(banOrder.length, MAX_MATCH_BANS)) {
+      } else if (completedBans < Math.min(banOrder.length, baseBanLimit)) {
         nextFlowState = await writeMatchFlowState(c.env, {
           ...flowState,
           phase: "ban",
@@ -5021,10 +5100,18 @@ app.post("/api/match/:matchId/action", async (c) => {
           currentSlot: undefined,
         })
       } else {
+        const preferredHomeModPlayer = flowState.firstPicker ?? match.playerA
+        const otherHomeModPlayer = opponentOf(preferredHomeModPlayer, match.playerA, match.playerB)
+        const hasHomeMod = (playerName: string): boolean => samePlayer(playerName, match.playerA)
+          ? Boolean(flowState.homeModA)
+          : Boolean(flowState.homeModB)
+        const firstHomeModPlayer = !hasHomeMod(preferredHomeModPlayer)
+          ? preferredHomeModPlayer
+          : !hasHomeMod(otherHomeModPlayer) ? otherHomeModPlayer : undefined
         nextFlowState = await writeMatchFlowState(c.env, {
           ...flowState,
-          phase: "craft",
-          turnPlayer: flowState.firstPicker ?? opponentOf(firstBanner, match.playerA, match.playerB),
+          phase: firstHomeModPlayer ? "home_mod" : "craft",
+          turnPlayer: firstHomeModPlayer ?? flowState.firstPicker ?? opponentOf(firstBanner, match.playerA, match.playerB),
           currentSlot: undefined,
         })
       }

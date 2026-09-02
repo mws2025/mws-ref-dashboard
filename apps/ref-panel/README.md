@@ -346,8 +346,8 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 | `action` | Body fields | Result |
 | --- | --- | --- |
 | `record_rolls` | `rollA`, `rollB` | Stores whole-number rolls from 1-100; a tie stays in `roll`, otherwise advances to `order`. |
-| `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `home_mod`. |
-| `set_home_mod` | `player`, `homeMod` | Stores a home mod; after both choose, advances to `ban`. |
+| `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `ban`. |
+| `set_home_mod` | `player`, `homeMod` | Stores a post-ban home mod; after both choose, advances to `craft`. |
 
 `POST /api/match/:matchId/action` body:
 
@@ -362,12 +362,16 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
 `manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
-portal. Recipes are crafted during `craft` before a map is selected. A match can have at most four active bans,
-including bans granted by Beignets. After the pick, call
+portal. Recipes are crafted during `craft` before a map is selected. RO32 uses two base bans total (one per player);
+later rounds use four base bans total. Beignets can grant its explicit extra ban up to the four-ban absolute ceiling.
+After the base bans, both players choose home mods before crafting and picking. After the pick, call
 `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }`. Completed slots may be picked again; each replay is
 stored as another `match_maps` row. TB is rejected until both players are one point from victory, except when an active
 Caramel unlocks it as the wildcard slot. Use `action: "unpick"` to clear the latest picked or completed row and reverse
 its map/recipe rewards; `unpick` does not require `player`.
+
+Map setup preserves the pool's required mods and sends `!mp allowed_mods HD` for NM/PS/HR/DT maps. Recipe-granted
+optional mods are added to that command. FM/TB remain Freemod.
 
 `POST /api/match/:matchId/score` derives the winner from recipe-adjusted scores:
 
@@ -377,17 +381,28 @@ its map/recipe rewards; `unpick` does not require `player`.
   "playerA": "Player A",
   "playerB": "Player B",
   "scoreA": "98.76%",
-  "scoreB": "98.54%"
+  "scoreB": "98.54%",
+  "usesHdA": true,
+  "usesHdB": false,
+  "missCountA": 0,
+  "missCountB": 1
 }
 ```
 
 Scores accept numbers, comma separators, and an optional trailing `%`. Crepe accuracy values are limited to 0-100.
+For score win conditions, a side marked `usesHdA`/`usesHdB` is normalized with `round(rawScore / 1.06)` before recipe
+score additions/multipliers and winner calculation. The portal exposes manual HD toggles; the integration test obtains
+the flags from each osu! score's mods automatically. `PS3` uses lower miss count, requires both nonnegative whole-number
+miss counts, and requests a replay when the miss counts tie. The integration route reads `statistics.count_miss` from
+osu!; manual score entry shows dedicated miss-count inputs.
 Replay recipes return `replayRequired: true` on the first run, and any tied result also requests another replay. Submit
 the replay through the same endpoint. Repeating a request after a lost response returns the already-committed result
 instead of applying rewards twice. Match stars are written to `matches` in the same settlement. Otherwise,
 the response contains final scores, winner, inventories, flow state, `nextPicker`, `ingredient`, `ingredientAmount`, and
 any scoring-mode restore commands. A map winner receives one pool ingredient; a player whose home mod matches that pool
-receives one additional ingredient even on a loss. A home-mod win therefore awards two.
+receives one additional ingredient even on a loss. A home-mod win therefore awards two. Successful settlements include
+both inventories in the same IRC score announcement. The deciding map announces the winner with `GGWP` and does not
+start another pick timer.
 
 `POST /api/match/:matchId/recipe` always requires `player` and `recipeId`. Activation-specific fields are optional unless
 the selected effect requires them:
@@ -405,7 +420,7 @@ the selected effect requires them:
 }
 ```
 
-- `mod` is used by Sugar Cookies.
+- `mod` is used by Sugar Cookies; allowed values are HD, HR, EZ, FL, and SO (HT is rejected).
 - `modA` and `modB` are used by Custard.
 - `targetSlot` is used by map protection and unban effects.
 - `ingredient` is used by Omelette and Dough.
