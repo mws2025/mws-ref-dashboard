@@ -22,4 +22,62 @@
     // { "binding": "API", "service": "mws-api-proxy" }
   ],
   "observability": { "enabled": true },
+
+  // Staging: a second copy of this Worker for previewing web changes against
+  // the real sheets. NOT DEPLOYED YET — the KV id below is a placeholder and
+  // `wrangler deploy --env staging` will fail until the two TODOs are done.
+  //
+  // Bindings (kv_namespaces, services, vars) are NOT inherited from the top
+  // level; each environment must restate every one it needs. `assets` is
+  // restated too rather than relying on remembering which side of that line it
+  // falls on — a silently missing ASSETS binding 404s every static file.
+  //
+  // Deploy with:  bunx opennextjs-cloudflare deploy -- --env staging
+  "env": {
+    "staging": {
+      "name": "mws-website-staging",
+      "main": ".open-next/worker.js",
+      "assets": {
+        "binding": "ASSETS",
+        "directory": ".open-next/assets",
+      },
+      "kv_namespaces": [
+        {
+          "binding": "NEXT_INC_CACHE_KV",
+          // TODO(1): create a SEPARATE namespace and paste its id here:
+          //   bunx wrangler kv namespace create NEXT_INC_CACHE_KV_STAGING
+          // Do not point this at the production id. It is Next's incremental
+          // cache: sharing it means staging serves prod's cached pages and
+          // overwrites them on revalidate.
+          "id": "REPLACE_ME_STAGING_KV_ID",
+        },
+      ],
+      "services": [
+        // Self-reference must name THIS worker, not the production one, or
+        // staging's background ISR revalidation runs against prod.
+        {
+          "binding": "WORKER_SELF_REFERENCE",
+          "service": "mws-website-staging",
+        },
+      ],
+      "observability": { "enabled": true },
+      // TODO(2): put Cloudflare Access in front of the staging hostname before
+      // the first deploy. PUBLISHED_STAGE_TABS in src/server/data/mappools.ts
+      // gates unreleased mappools, and the whole point of staging is to look
+      // at the next round early — an open staging URL leaks exactly what that
+      // allowlist exists to protect.
+      //
+      // TODO(3): secrets are per-environment and none are set on staging yet.
+      // Every value in .dev.vars needs its own put, or the pages render their
+      // empty states instead of the sheet data:
+      //   for k in GOOGLE_SA_EMAIL GOOGLE_SA_PRIVATE_KEY SHEET_ID_ADMIN \
+      //            SHEET_ID_POOLING SHEET_ID_REFEREE OSU_CLIENT_ID \
+      //            OSU_CLIENT_SECRET REVALIDATE_SECRET; do
+      //     bunx wrangler secret put "$k" --env staging
+      //   done
+      // Reusing the production sheet ids is fine (reads only) but shares the
+      // Google and osu! API quotas.
+      "workers_dev": true,
+    },
+  },
 }
