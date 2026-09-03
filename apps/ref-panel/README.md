@@ -131,7 +131,9 @@ Access control uses the Sheets `access` tab:
 username, osu_id, last_accessed_at, is_admin
 ```
 
-OAuth grants access only when osu! user details match a row in `access`. Successful login updates `last_accessed_at`.
+OAuth grants access only when osu! user details match a row in `access`. Access rows are cached briefly to avoid
+exhausting the Google Sheets per-user read quota. Successful login updates `last_accessed_at` on a best-effort basis;
+an audit timestamp write failure does not invalidate the new session.
 `is_admin` accepts `TRUE` or `FALSE`; the session response exposes it as `user.is_admin`, and the schedule mutation
 rechecks the Sheet before every write.
 

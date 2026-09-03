@@ -646,6 +646,7 @@ async function getGoogleAccessToken(env: Bindings): Promise<string> {
 const _sheetCache = new Map<string, { data: string[][]; ts: number }>()
 const _sheetBatchInflight = new Map<string, Promise<string[][][]>>()
 const _CACHE_TTL: Partial<Record<string, number>> = {
+  "access!A2:D":         60_000,
   "config!A:B":          30_000,
   "mappool!A1:Z":        30_000,
   "items!A1:Z":          30_000,
@@ -768,7 +769,8 @@ async function getSheetValuesBatch(env: Bindings, rangesA1: readonly string[]): 
 }
 
 async function getAccessRows(env: Bindings): Promise<string[][]> {
-  return getSheetValues(env, "access!A2:D")
+  const [rows] = await getSheetValuesBatch(env, ["access!A2:D"])
+  return rows
 }
 
 function normalizeHeader(header: string): string {
@@ -2177,10 +2179,18 @@ async function handleOsuCallback(c: AppContext) {
     return c.text("Missing OAuth code", 400)
   }
 
+  let stage = "configuration"
+
   try {
     const redirectUri = resolveOsuRedirectUri(c)
+
+    stage = "token_exchange"
     const accessToken = await exchangeOsuCodeForToken(c.env, oauthCode, redirectUri)
+
+    stage = "profile_lookup"
     const osuUser = await fetchOsuUser(accessToken, c.env)
+
+    stage = "access_lookup"
     const accessRows = await getAccessRows(c.env)
     const accessEntry = findAuthorizedAccessEntry(accessRows, osuUser)
 
@@ -2188,8 +2198,7 @@ async function handleOsuCallback(c: AppContext) {
       return c.text("403 Forbidden", 403)
     }
 
-    await updateLastAccessedAt(c.env, accessEntry.rowNumber)
-
+    stage = "session_creation"
     const sessionSecret = mustEnv(c.env, "SESSION_SECRET")
     const sessionToken = await issueSessionToken(sessionSecret, {
       username: osuUser.username,
@@ -2198,11 +2207,20 @@ async function handleOsuCallback(c: AppContext) {
 
     setCookie(c, SESSION_COOKIE_NAME, sessionToken, sessionCookieOptions(c.req.url))
 
+    // Login must not fail when this nonessential audit write is rate limited.
+    c.executionCtx.waitUntil(
+      updateLastAccessedAt(c.env, accessEntry.rowNumber).catch((error) => {
+        console.error("OAuth last-access update failed", error)
+      })
+    )
+
     return c.redirect("/", 302)
   } catch (error) {
+    console.error(`OAuth callback failed during ${stage}`, error)
     return c.json(
       {
         ok: false,
+        stage,
         error: error instanceof Error ? error.message : "OAuth callback failed",
       },
       500
