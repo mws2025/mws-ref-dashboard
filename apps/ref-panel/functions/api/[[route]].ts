@@ -174,22 +174,32 @@ type RecipeEventRecord = {
 
 const OSU_AUTH_BASE = "https://osu.ppy.sh"
 
-function osuApiBase(env: Bindings): string {
-  return env.OSU_PROXY_BASE?.trim() || OSU_AUTH_BASE
-}
+async function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promise<Response> {
+  const proxyBase = env.OSU_PROXY_BASE?.trim()
+  if (!proxyBase) {
+    return fetch(`${OSU_AUTH_BASE}${path}`, init)
+  }
 
-function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   const proxySecret = env.OSU_PROXY_SECRET?.trim()
 
-  if (env.OSU_PROXY_BASE?.trim() && proxySecret) {
+  if (proxySecret) {
     headers.set("X-Proxy-Secret", proxySecret)
   }
 
-  return fetch(`${osuApiBase(env)}${path}`, {
-    ...init,
-    headers,
-  })
+  try {
+    const response = await fetch(`${proxyBase}${path}`, { ...init, headers })
+    if (response.status < 521 || response.status > 524) {
+      return response
+    }
+    console.warn(`osu! proxy unavailable (${response.status}); retrying directly`)
+  } catch (error) {
+    console.warn("osu! proxy request failed; retrying directly", error)
+  }
+
+  const directHeaders = new Headers(init?.headers)
+  directHeaders.delete("X-Proxy-Secret")
+  return fetch(`${OSU_AUTH_BASE}${path}`, { ...init, headers: directHeaders })
 }
 
 type OsuMpUser = { id: number; username: string }
