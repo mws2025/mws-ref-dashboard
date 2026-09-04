@@ -6,6 +6,7 @@ import {
   baseBanLimitForRound,
   canClaimRefereeAssignment,
   compareMapResults,
+  formatMatchResultSections,
   formatLobbyMods,
   formatLobbyTitle,
   homeModIngredientAwards,
@@ -3560,6 +3561,7 @@ async function buildAndPostResultEmbed(
   scoreA: number,
   scoreB: number,
   winner: string,
+  flowState: MatchFlowState,
 ): Promise<void> {
   const configMap = await getConfigMap(env)
   const resultWebhook = configMap.get("result webhook")?.trim()
@@ -3591,9 +3593,6 @@ async function buildAndPostResultEmbed(
     const name = firstValue(r, ["name"])
     if (id && name) itemNameMap.set(id, name)
   }
-
-  const bans  = matchMaps.filter((r) => firstValue(r, ["status"]) === "banned")
-  const picks = matchMaps.filter((r) => firstValue(r, ["status"]) === "completed")
 
   // osu! API — match duration (best-effort)
   let durationStr = ""
@@ -3633,48 +3632,32 @@ async function buildAndPostResultEmbed(
 
   const eA = "🔴"
   const eB = "🔵"
-  const pEmoji = (name: string) => name.toLowerCase() === playerA.toLowerCase() ? eA : eB
   const winnerIsA = winner.toLowerCase() === playerA.toLowerCase()
 
-  const bansGrouped = new Map<string, string[]>()
-  for (const r of bans) {
-    const slot = firstValue(r, ["slot"])
-    const by   = firstValue(r, ["banned_by"])
-    const key  = pEmoji(by)
-    bansGrouped.set(key, [...(bansGrouped.get(key) ?? []), `\`${slot}\``])
-  }
-  const bansValue = bansGrouped.size > 0
-    ? [...bansGrouped.entries()].map(([emoji, slots]) => `${emoji} ${slots.join(", ")}`).join("\n")
-    : "None"
-
-  const picksValue = picks.length > 0
-    ? picks.map((r) => {
-        const slot     = firstValue(r, ["slot"])
-        const pickedBy = firstValue(r, ["picked_by"])
-        const mapWon   = firstValue(r, ["winner"])
-        return `${pEmoji(pickedBy)} \`${slot}\` - ${pEmoji(mapWon)}`
-      }).join("\n")
-    : "None"
-
-  // Recipes used grouped by player
-  const recipesA = itemEvents
-    .filter((r) => firstValue(r, ["player_id", "player"]).toLowerCase() === playerA.toLowerCase())
-    .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
-    .filter(Boolean)
-  const recipesB = itemEvents
-    .filter((r) => firstValue(r, ["player_id", "player"]).toLowerCase() === playerB.toLowerCase())
-    .map((r) => itemNameMap.get(firstValue(r, ["item_id"])) ?? firstValue(r, ["item_id"]))
-    .filter(Boolean)
-  const recipesValue = [
-    ...(recipesA.length > 0 ? [`${eA} ${recipesA.join(", ")}`] : []),
-    ...(recipesB.length > 0 ? [`${eB} ${recipesB.join(", ")}`] : []),
-  ].join("\n") || "None"
+  const sections = formatMatchResultSections(
+    playerA,
+    playerB,
+    flowState.homeModA,
+    flowState.homeModB,
+    matchMaps.map((record) => ({
+      slot: firstValue(record, ["slot"]),
+      status: firstValue(record, ["status"]),
+      pickedBy: firstValue(record, ["picked_by"]),
+      bannedBy: firstValue(record, ["banned_by"]),
+      winner: firstValue(record, ["winner"]),
+    })),
+    itemEvents.map((record) => ({
+      player: firstValue(record, ["player_id", "player"]),
+      name: itemNameMap.get(firstValue(record, ["item_id"])) ?? firstValue(record, ["item_id"]),
+      target: firstValue(record, ["target"]),
+    })),
+  )
 
   const embedColor = winnerIsA ? 0xa4564e : 0x6f8ea5
   const scoreLine = winnerIsA
     ? `### 🏆 ${eA} **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** ${eB}`
     : `### ${eA} **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** ${eB} 🏆`
-  const mpLine     = mpId ? `https://osu.ppy.sh/mp/${mpId}` : null
+  const mpLine     = mpId ? `<https://osu.ppy.sh/community/matches/${mpId}>` : null
   const scoreStr   = [scoreLine, mpLine].filter(Boolean).join("\n")
   const footerParts: string[] = []
   if (durationStr) footerParts.push(`Duration: ${durationStr}`)
@@ -3683,9 +3666,10 @@ async function buildAndPostResultEmbed(
   const title     = `${abbreviation} ${roundPart}Match ${matchId}`
 
   const fields = [
-    { name: "Bans",            value: bansValue,    inline: true },
-    { name: "Picks - Winner",  value: picksValue,   inline: true },
-    ...(recipesValue !== "None" ? [{ name: "Recipes used", value: recipesValue, inline: false }] : []),
+    { name: "Bans",          value: sections.bans,     inline: false },
+    { name: "Home Mods",     value: sections.homeMods, inline: false },
+    { name: "Match Rundown", value: sections.rundown,  inline: false },
+    ...(sections.recipes !== "None" ? [{ name: "Recipes used", value: sections.recipes, inline: false }] : []),
   ]
 
   await fetch(resultWebhook, {
@@ -3751,7 +3735,7 @@ app.post("/api/match/:matchId/post-result", async (c) => {
       JSON.stringify(before ?? {}),
       JSON.stringify({ status: "completed", winner, scoreA, scoreB }),
     ).catch(() => {})
-    await buildAndPostResultEmbed(c.env, matchId, playerA, playerB, scoreA, scoreB, winner)
+    await buildAndPostResultEmbed(c.env, matchId, playerA, playerB, scoreA, scoreB, winner, state)
     return c.json({ ok: true, winner, scoreA, scoreB, state })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Post result failed" }, 500)

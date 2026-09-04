@@ -451,6 +451,10 @@ Other mutation bodies:
 | `POST /api/match/:matchId/post-result` | `{ "playerA": "...", "playerB": "...", "scoreA": 5, "scoreB": 3, "winner": "..." }` |
 | `POST /api/match/:matchId/forfeit` | `{ "winner": "...", "playerA": "...", "playerB": "..." }` |
 
+The result webhook includes the final score and canonical osu! community match URL, bans grouped by side, both home
+mods, the chronological pick/winner rundown, recipe names with their target slots, and the osu! API-derived duration
+when available.
+
 Test mode suppresses live IRC and lobby transport where marked in the implementation. Its Integration tab reads actual
 osu! MP history, while Sheet-backed match, inventory, score, recipe, cursor, and result writes remain authoritative.
 

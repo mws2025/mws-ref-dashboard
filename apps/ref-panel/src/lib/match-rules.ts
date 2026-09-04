@@ -79,6 +79,80 @@ export type ScheduleDateTimeDisplay = {
   time: string
 }
 
+export type MatchResultMapEntry = {
+  slot: string
+  status: string
+  pickedBy?: string
+  bannedBy?: string
+  winner?: string
+}
+
+export type MatchResultRecipeEntry = {
+  player: string
+  name: string
+  target?: string
+}
+
+export type MatchResultSections = {
+  bans: string
+  homeMods: string
+  rundown: string
+  recipes: string
+}
+
+export function formatMatchResultSections(
+  playerA: string,
+  playerB: string,
+  homeModA: string | undefined,
+  homeModB: string | undefined,
+  maps: readonly MatchResultMapEntry[],
+  recipes: readonly MatchResultRecipeEntry[],
+): MatchResultSections {
+  const red = "🔴"
+  const blue = "🔵"
+  const emojiFor = (player: string | undefined): string => {
+    const normalized = player?.trim().toLowerCase()
+    if (normalized === playerA.trim().toLowerCase()) return red
+    if (normalized === playerB.trim().toLowerCase()) return blue
+    return "⚪"
+  }
+
+  const bansByPlayer = new Map<string, string[]>([[red, []], [blue, []]])
+  for (const map of maps) {
+    if (map.status.toLowerCase() !== "banned" || !map.slot || !map.bannedBy) continue
+    const emoji = emojiFor(map.bannedBy)
+    bansByPlayer.get(emoji)?.push(`\`${map.slot}\``)
+  }
+  const bans = [...bansByPlayer.entries()]
+    .filter(([, slots]) => slots.length > 0)
+    .map(([emoji, slots]) => `${emoji} bans ${slots.join(", ")}`)
+    .join("\n") || "None"
+
+  const homeMods = [
+    `${red} \`${homeModA || "Not selected"}\``,
+    `${blue} \`${homeModB || "Not selected"}\``,
+  ].join("\n")
+
+  const rundown = maps
+    .filter((map) => map.status.toLowerCase() === "completed")
+    .map((map) => `${emojiFor(map.pickedBy)} picks \`${map.slot}\` - ${emojiFor(map.winner)} wins!`)
+    .join("\n") || "None"
+
+  const recipeLines = recipes
+    .filter((recipe) => recipe.name)
+    .map((recipe) => {
+      const target = recipe.target ? ` \`${recipe.target}\`` : ""
+      return `${emojiFor(recipe.player)} ${recipe.name}${target}`
+    })
+
+  return {
+    bans,
+    homeMods,
+    rundown,
+    recipes: recipeLines.join("\n") || "None",
+  }
+}
+
 function scheduleDateParts(value: string): [number, number, number] | null {
   const isoMatch = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (isoMatch) {

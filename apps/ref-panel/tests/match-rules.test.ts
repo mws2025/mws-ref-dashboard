@@ -5,6 +5,7 @@ import {
   baseBanLimitForRound,
   canClaimRefereeAssignment,
   compareMapResults,
+  formatMatchResultSections,
   formatScheduleDateTime,
   formatScheduleTimeInput,
   formatLobbyTitle,
@@ -155,6 +156,29 @@ describe("referee input and lobby formatting", () => {
     expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: (Player A) vs (Player B)")
     expect(lobbyInviteTarget("WEARY", "12345")).toBe("#12345")
     expect(lobbyInviteTarget("Cinnamon Twist")).toBe("Cinnamon_Twist")
+  })
+})
+
+describe("match result formatting", () => {
+  test("includes bans, home mods, map winners, and recipe targets", () => {
+    expect(formatMatchResultSections(
+      "teffek",
+      "Fuma",
+      "HR",
+      "PS",
+      [
+        { slot: "DT1", status: "banned", bannedBy: "teffek" },
+        { slot: "DT3", status: "banned", bannedBy: "Fuma" },
+        { slot: "FM1", status: "completed", pickedBy: "Fuma", winner: "teffek" },
+        { slot: "PS3", status: "completed", pickedBy: "Fuma", winner: "Fuma" },
+      ],
+      [{ player: "teffek", name: "Crepe", target: "PS3" }],
+    )).toEqual({
+      bans: "🔴 bans `DT1`\n🔵 bans `DT3`",
+      homeMods: "🔴 `HR`\n🔵 `PS`",
+      rundown: "🔵 picks `FM1` - 🔴 wins!\n🔵 picks `PS3` - 🔵 wins!",
+      recipes: "🔴 Crepe `PS3`",
+    })
   })
 })
 
