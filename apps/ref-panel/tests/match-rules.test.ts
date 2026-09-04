@@ -5,6 +5,7 @@ import {
   baseBanLimitForRound,
   canClaimRefereeAssignment,
   compareMapResults,
+  formatScheduleDateTime,
   formatScheduleTimeInput,
   formatLobbyTitle,
   homeModIngredientAwards,
@@ -119,6 +120,18 @@ describe("referee input and lobby formatting", () => {
     expect(isValidScheduleDate("2026-02-30")).toBe(false)
     expect(scheduleDateSerial("1970-01-01")).toBe(25569)
     expect(scheduleDateSerial("2026-02-30")).toBeNull()
+  })
+
+  test("converts UTC schedules to another timezone across calendar days", () => {
+    expect(formatScheduleDateTime("2026-09-04", "20:30", "UTC")).toEqual({
+      date: "(Fri) Sep 4",
+      time: "20:30",
+    })
+    expect(formatScheduleDateTime("2026-09-04", "20:30 UTC", "Asia/Ho_Chi_Minh")).toEqual({
+      date: "(Sat) Sep 5",
+      time: "03:30",
+    })
+    expect(formatScheduleDateTime("invalid", "20:30", "UTC")).toBeNull()
   })
 
   test("accepts score and accuracy formatting", () => {

@@ -74,6 +74,53 @@ export function scheduleDateSerial(value: string): number | null {
   return Date.UTC(year, month - 1, day) / 86_400_000 + 25_569
 }
 
+export type ScheduleDateTimeDisplay = {
+  date: string
+  time: string
+}
+
+function scheduleDateParts(value: string): [number, number, number] | null {
+  const isoMatch = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (isoMatch) {
+    return [Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3])]
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return [parsed.getFullYear(), parsed.getMonth() + 1, parsed.getDate()]
+}
+
+export function formatScheduleDateTime(
+  dateValue: string,
+  timeValue: string,
+  timeZone: string,
+): ScheduleDateTimeDisplay | null {
+  const dateParts = scheduleDateParts(dateValue)
+  const timeMatch = timeValue.trim().match(/^(\d{1,2}):(\d{2})/)
+  if (!dateParts || !timeMatch) return null
+
+  const [year, month, day] = dateParts
+  const hours = Number(timeMatch[1])
+  const minutes = Number(timeMatch[2])
+  if (hours > 23 || minutes > 59) return null
+
+  const instant = new Date(Date.UTC(year, month - 1, day, hours, minutes))
+  try {
+    const weekday = instant.toLocaleDateString("en-US", { timeZone, weekday: "short" })
+    const monthName = instant.toLocaleDateString("en-US", { timeZone, month: "short" })
+    const localDay = instant.toLocaleDateString("en-US", { timeZone, day: "numeric" })
+    const time = instant.toLocaleTimeString("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+    return { date: `(${weekday}) ${monthName} ${localDay}`, time }
+  } catch {
+    return null
+  }
+}
+
 export function parseRollAnnouncement(message: string): RollAnnouncement | null {
   const match = message.trim().match(/^(.+?)\s+(?:rolls|rolled)\s+(\d+)\s+point\(s\)\.?$/i)
   if (!match) return null

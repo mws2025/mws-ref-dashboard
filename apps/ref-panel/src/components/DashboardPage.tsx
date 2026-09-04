@@ -30,6 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import {
   Table,
   TableBody,
@@ -41,6 +42,7 @@ import {
 import { TOURNAMENT_NAME, TOURNAMENT_SUBTITLE } from "@/data/constants"
 import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
 import {
+  formatScheduleDateTime,
   formatScheduleTimeInput,
   normalizeScheduleTime,
   refereeAssignments,
@@ -181,6 +183,8 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
   const [scheduleTime, setScheduleTime] = useState("")
   const [scheduleSaving, setScheduleSaving] = useState(false)
   const [calendarOpen, setCalendarOpen] = useState(false)
+  const [showLocalTime, setShowLocalTime] = useState(false)
+  const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
   const [scheduleSort, setScheduleSort] = useState<{ key: ScheduleSortKey; direction: SortDirection }>({
     key: "id",
     direction: "asc",
@@ -461,7 +465,33 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
         <Separator />
 
         <section className="space-y-3">
-          <h2 className="font-heading text-xl">Tournament schedule</h2>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="font-heading text-xl">Tournament schedule</h2>
+            <div className="flex min-h-8 items-center gap-2.5 text-sm" title={`Your timezone: ${localTimeZone}`}>
+              <Label
+                htmlFor="schedule-timezone"
+                className={showLocalTime ? "cursor-pointer text-muted-foreground" : "cursor-pointer text-foreground"}
+              >
+                UTC
+              </Label>
+              <Switch
+                id="schedule-timezone"
+                checked={showLocalTime}
+                onCheckedChange={setShowLocalTime}
+                aria-label="Show schedule in local time"
+                aria-describedby="schedule-local-timezone"
+              />
+              <Label
+                htmlFor="schedule-timezone"
+                className={showLocalTime ? "cursor-pointer text-foreground" : "cursor-pointer text-muted-foreground"}
+              >
+                Local
+              </Label>
+              <span id="schedule-local-timezone" className="hidden text-xs text-muted-foreground md:inline">
+                {localTimeZone.replaceAll("_", " ")}
+              </span>
+            </div>
+          </div>
           <div className="overflow-hidden rounded-lg border border-border">
             <ScrollArea className="w-full">
               <Table className="min-w-[1160px] table-fixed">
@@ -499,15 +529,21 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                   {!matchesResponse ? (
                     <SkeletonTableRows />
                   ) : sortedScheduleMatches.length > 0 ? (
-                    sortedScheduleMatches.map((m) => (
-                      <TableRow key={m.id}>
+                    sortedScheduleMatches.map((m) => {
+                      const displaySchedule = formatScheduleDateTime(
+                        m.date,
+                        m.time,
+                        showLocalTime ? localTimeZone : "UTC",
+                      ) ?? { date: formatMatchDate(m.date), time: m.time }
+
+                      return <TableRow key={m.id}>
                         <TableCell className="text-muted-foreground">{m.round}</TableCell>
                         <TableCell className="font-mono text-xs">{m.id}</TableCell>
                         <TableCell className="truncate font-medium" title={`${m.playerA} vs ${m.playerB}`}>
                           {m.playerA} <span className="text-muted-foreground">vs</span> {m.playerB}
                         </TableCell>
-                        <TableCell className="text-muted-foreground whitespace-nowrap">{formatMatchDate(m.date)}</TableCell>
-                        <TableCell className="text-muted-foreground">{m.time}</TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">{displaySchedule.date}</TableCell>
+                        <TableCell className="text-muted-foreground">{displaySchedule.time}</TableCell>
                         <TableCell className="truncate text-muted-foreground" title={m.referee || "Unassigned"}>{m.referee || "Unassigned"}</TableCell>
                         <TableCell>
                           {m.status === "live"
@@ -525,7 +561,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                           </div>
                         </TableCell>
                       </TableRow>
-                    ))
+                    })
                   ) : (
                     <TableRow>
                       <TableCell colSpan={8}>
