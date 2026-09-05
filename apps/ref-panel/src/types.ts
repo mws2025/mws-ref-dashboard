@@ -94,6 +94,7 @@ export interface TestExpectedSetup {
   playerAMods: string[]
   playerBMods: string[]
   scoringType: string
+  winCondition: "score" | "accuracy"
 }
 
 export interface TestMpBinding {

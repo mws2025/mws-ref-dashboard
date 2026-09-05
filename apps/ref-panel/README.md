@@ -170,6 +170,9 @@ Match control reads and writes these additional tabs when available:
 mappool:
 round, map_id, mod_pool, beatmap_id, title
 
+caramel_maps:
+pick_id, title, stage, mod, win_con, mappool_year, map_id
+
 match_maps:
 match_id, slot, map_id, picked_by, banned_by, status, score_a, score_b, winner
 
@@ -430,8 +433,11 @@ the selected effect requires them:
 
 Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. An active
 Caramel locks both players out of further crafting. Crafting Caramel after another pending recipe refunds and reverts
-that recipe before Caramel is charged. Caramel persists a randomly selected configured beatmap in its event payload and
-overrides the wildcard setup command with that beatmap. Magic Cake copies the opponent's latest `resolved` recipe, not
+that recipe before Caramel is charged. Caramel selects only from validated `caramel_maps` rows and persists the selected
+beatmap, source slot/stage/year, mods, and win condition in its event payload. Blank `win_con` uses ScoreV2 score; `acc`
+uses the better accuracy to determine the map winner while the osu! lobby remains on ScoreV2. Blank `mod` applies no
+forced mod, while `double_time`, `hard_rock`, `easy`, `easy-double_time`, and `autopilot` map to Bancho mod acronyms.
+Magic Cake copies the opponent's latest `resolved` recipe, not
 an active or reverted event. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes
 are listed alphabetically.
 

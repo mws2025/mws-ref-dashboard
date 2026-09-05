@@ -247,6 +247,33 @@ export function lobbyModsForPool(pool: string, enforceNF: boolean): string {
   }
 }
 
+export type CaramelWinCondition = "score" | "accuracy"
+
+export function caramelLobbyMods(value: string, enforceNF: boolean): string | null {
+  const normalized = value.trim().toLowerCase().replace(/[\s+]+/g, "-")
+  const modsBySheetValue: Record<string, string[]> = {
+    "": [],
+    none: [],
+    easy: ["EZ"],
+    hard_rock: ["HR"],
+    "hard-rock": ["HR"],
+    double_time: ["DT"],
+    "double-time": ["DT"],
+    "easy-double_time": ["EZ", "DT"],
+    "easy-double-time": ["EZ", "DT"],
+    autopilot: ["AP"],
+  }
+  const mods = modsBySheetValue[normalized]
+  return mods ? formatLobbyMods(mods, enforceNF) : null
+}
+
+export function caramelWinCondition(value: string): CaramelWinCondition | null {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
+  if (!normalized || normalized === "score" || normalized === "scorev2") return "score"
+  if (normalized === "acc" || normalized === "accuracy") return "accuracy"
+  return null
+}
+
 export function addLobbyMod(base: string, mod: string, enforceNF: boolean): string {
   const baseMods = base.trim().split(/\s+/).filter(Boolean)
   if (baseMods.some((candidate) => candidate.toLowerCase() === "freemod")) {

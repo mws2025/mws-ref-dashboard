@@ -3,6 +3,8 @@ import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
   baseBanLimitForRound,
+  caramelLobbyMods,
+  caramelWinCondition,
   canClaimRefereeAssignment,
   compareMapResults,
   formatMatchResultSections,
@@ -57,6 +59,23 @@ describe("lobby mods", () => {
   test("preserves selected mods when adding recipe mods", () => {
     expect(addLobbyMod("HR NF", "HD", true)).toBe("HR HD NF")
     expect(addLobbyMod("Freemod NF", "HR", true)).toBe("Freemod NF")
+  })
+
+  test("maps validated Caramel sheet mods to lobby acronyms", () => {
+    expect(caramelLobbyMods("", true)).toBe("NF")
+    expect(caramelLobbyMods("double_time", true)).toBe("DT NF")
+    expect(caramelLobbyMods("hard_rock", false)).toBe("HR")
+    expect(caramelLobbyMods("easy-double_time", true)).toBe("EZ DT NF")
+    expect(caramelLobbyMods("autopilot", false)).toBe("AP")
+    expect(caramelLobbyMods("unsupported", true)).toBeNull()
+  })
+
+  test("defaults blank Caramel win conditions to score and validates accuracy", () => {
+    expect(caramelWinCondition("")).toBe("score")
+    expect(caramelWinCondition("scorev2")).toBe("score")
+    expect(caramelWinCondition("acc")).toBe("accuracy")
+    expect(caramelWinCondition("accuracy")).toBe("accuracy")
+    expect(caramelWinCondition("combo")).toBeNull()
   })
 })
 

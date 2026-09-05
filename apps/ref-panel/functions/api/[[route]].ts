@@ -4,6 +4,8 @@ import { handle } from "hono/cloudflare-pages"
 import { sign, verify } from "hono/jwt"
 import {
   baseBanLimitForRound,
+  caramelLobbyMods,
+  caramelWinCondition,
   canClaimRefereeAssignment,
   compareMapResults,
   formatMatchResultSections,
@@ -123,6 +125,7 @@ type TestExpectedSetup = {
   playerAMods: string[]
   playerBMods: string[]
   scoringType: string
+  winCondition: "score" | "accuracy"
 }
 
 type TestMpBinding = {
@@ -660,6 +663,7 @@ const _CACHE_TTL: Partial<Record<string, number>> = {
   "access!A2:D":         60_000,
   "config!A:B":          30_000,
   "mappool!A1:Z":        30_000,
+  "caramel_maps!A1:Z":   30_000,
   "items!A1:Z":          30_000,
   "matches!A1:Z":        10_000,
   "match_maps!A1:Z":      2_000,
@@ -1417,7 +1421,7 @@ function parseTestMpBinding(raw: string): TestMpBinding | undefined {
     const lastGameId = Number(value.lastGameId ?? 0)
     if (![mpId, playerAOsuId, playerBOsuId, lastEventId, lastGameId].every(Number.isFinite)) return undefined
     const expectedRaw = toRecord(value.expected)
-    const expected = expectedRaw && Number.isFinite(Number(expectedRaw.beatmapId))
+    const expected: TestExpectedSetup | undefined = expectedRaw && Number.isFinite(Number(expectedRaw.beatmapId))
       ? {
           slot: String(expectedRaw.slot ?? ""),
           beatmapId: Number(expectedRaw.beatmapId),
@@ -1425,6 +1429,7 @@ function parseTestMpBinding(raw: string): TestMpBinding | undefined {
           playerAMods: normalizeOsuMods(expectedRaw.playerAMods),
           playerBMods: normalizeOsuMods(expectedRaw.playerBMods),
           scoringType: String(expectedRaw.scoringType ?? "score"),
+          winCondition: expectedRaw.winCondition === "accuracy" ? "accuracy" as const : "score" as const,
         }
       : undefined
     return {
@@ -1908,6 +1913,7 @@ type RecipePickSetup = {
   playerBMods: string[]
   beatmapId?: string
   mapTitle?: string
+  winCondition: "score" | "accuracy"
 }
 
 async function activateRecipesForPick(
@@ -1950,6 +1956,7 @@ async function activateRecipesForPick(
   const notices: string[] = []
   let beatmapId: string | undefined
   let mapTitle: string | undefined
+  let winCondition: "score" | "accuracy" = "score"
   const extraPlayerMods = new Map<string, Set<string>>([
     [playerA.toLowerCase(), new Set<string>()],
     [playerB.toLowerCase(), new Set<string>()],
@@ -1991,14 +1998,23 @@ async function activateRecipesForPick(
         if (event.itemId === "item_11") notices.push("Quiche active: HD is forced for both players on this map.")
       }
     } else if (effectType === "accuracy_mode") {
+      winCondition = "accuracy"
       commandsBefore.push(`!mp set ${teamMode} 1 ${lobbySize}`)
     } else if (effectType === "scoring_mode") {
       commandsBefore.push(`!mp set ${teamMode} 0 ${lobbySize}`)
     } else if (effectType === "wildcard_slot") {
+      commandsBefore.push(`!mp set ${teamMode} 3 ${lobbySize}`)
       beatmapId = String(payload.wildcardBeatmapId ?? "").trim() || undefined
       mapTitle = String(payload.wildcardMap ?? "").trim() || undefined
-      const wildcardPool = String(payload.wildcardPool ?? "").trim().toUpperCase()
-      if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
+      const wildcardMod = payload.wildcardMod
+      if (typeof wildcardMod === "string") {
+        const wildcardMods = caramelLobbyMods(wildcardMod, enforceNF)
+        if (wildcardMods) mods = wildcardMods
+      } else {
+        const wildcardPool = String(payload.wildcardPool ?? "").trim().toUpperCase()
+        if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
+      }
+      if (payload.wildcardWinCondition === "accuracy") winCondition = "accuracy"
       if (mapTitle) notices.push(`Caramel wildcard: ${mapTitle}`)
     }
   }
@@ -2020,6 +2036,7 @@ async function activateRecipesForPick(
     playerBMods: requiredMods(playerB),
     beatmapId,
     mapTitle,
+    winCondition,
   }
 }
 
@@ -2703,7 +2720,7 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
       { key: "player_b_mods", label: `${match.playerB} mods`, ok: playerBModsMatch, expected: binding.expected.playerBMods.join(" ") || "None", actual: [...actualPlayerBMods].join(" ") || "None" },
       { key: "scoring", label: "Scoring type", ok: game.scoringType === binding.expected.scoringType, expected: binding.expected.scoringType, actual: game.scoringType || "unknown" },
     ]
-    const accuracyMode = binding.expected.scoringType === "accuracy"
+    const accuracyMode = binding.expected.winCondition === "accuracy"
     const scoreValue = (score: OsuMpScore | undefined): number | null => {
       if (!score) return null
       if (!accuracyMode) return score.score
@@ -3187,7 +3204,10 @@ app.post("/api/match/:matchId/score", async (c) => {
       ...itemPayload(itemForEvent(items, event) ?? {}),
       ...event.payload,
     })
-    const accuracyMode = activeEvents.some((event) => effect(event) === "accuracy_mode")
+    const accuracyMode = activeEvents.some((event) =>
+      effect(event) === "accuracy_mode" ||
+      (effect(event) === "wildcard_slot" && payloadFor(event).wildcardWinCondition === "accuracy")
+    )
     const missCountMode = isMissCountWinCondition(slot)
     if (accuracyMode && (rawScoreA > 100 || rawScoreB > 100)) {
       return c.json({ error: "Accuracy values must be between 0% and 100%" }, 400)
@@ -3916,21 +3936,37 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       })
       target = firstValue(wildcard ?? {}, ["map_id", "slot"])
       if (!target) return c.json({ error: "No available wildcard/TB slot exists in this mappool" }, 409)
-      const randomCandidates = poolRecords.filter((record) =>
-        firstValue(record, ["mod_pool", "pool"]).toUpperCase() !== "TB" &&
-        /^\d+$/.test(firstValue(record, ["beatmap_id"]))
-      )
-      if (randomCandidates.length === 0) return c.json({ error: "No wildcard beatmaps are configured" }, 409)
+      const caramelRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "caramel_maps!A1:Z"))
+      const randomCandidates = caramelRecords.flatMap((record) => {
+        const pickId = firstValue(record, ["pick_id"])
+        const title = firstValue(record, ["title"])
+        const stage = firstValue(record, ["stage"])
+        const mod = firstValue(record, ["mod"])
+        const winCondition = caramelWinCondition(firstValue(record, ["win_con"]))
+        const mappoolYear = firstValue(record, ["mappool_year"])
+        const beatmapId = firstValue(record, ["map_id"])
+        if (
+          !pickId || !title || !stage || !mappoolYear ||
+          !/^\d+$/.test(beatmapId) || Number(beatmapId) <= 0 ||
+          caramelLobbyMods(mod, false) === null || winCondition === null
+        ) return []
+        return [{ pickId, title, stage, mod, winCondition, mappoolYear, beatmapId }]
+      })
+      if (randomCandidates.length === 0) {
+        return c.json({ error: "No valid maps are configured in caramel_maps" }, 409)
+      }
       const randomBytes = new Uint32Array(1)
       crypto.getRandomValues(randomBytes)
       const randomMap = randomCandidates[(randomBytes[0] ?? 0) % randomCandidates.length]
       activationPayload.rewardIngredients = rewards
       activationPayload.wildcardSlot = target
-      activationPayload.wildcardBeatmapId = firstValue(randomMap ?? {}, ["beatmap_id"])
-      activationPayload.wildcardMap = firstValue(randomMap ?? {}, ["title", "map"])
-      activationPayload.wildcardSourceSlot = firstValue(randomMap ?? {}, ["map_id", "slot"])
-      activationPayload.wildcardSourceRound = firstValue(randomMap ?? {}, ["round"])
-      activationPayload.wildcardPool = firstValue(randomMap ?? {}, ["mod_pool", "pool"]).toUpperCase()
+      activationPayload.wildcardBeatmapId = randomMap?.beatmapId
+      activationPayload.wildcardMap = randomMap?.title
+      activationPayload.wildcardSourceSlot = randomMap?.pickId
+      activationPayload.wildcardSourceRound = randomMap?.stage
+      activationPayload.wildcardMappoolYear = randomMap?.mappoolYear
+      activationPayload.wildcardMod = randomMap?.mod
+      activationPayload.wildcardWinCondition = randomMap?.winCondition
     }
 
     if (effectType === "comeback_bonus") {
@@ -5221,6 +5257,7 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
             playerAMods: recipeSetup.playerAMods,
             playerBMods: recipeSetup.playerBMods,
             scoringType: expectedScoringType,
+            winCondition: recipeSetup.winCondition,
           },
         }
       : flowState.testBinding

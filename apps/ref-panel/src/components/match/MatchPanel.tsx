@@ -756,7 +756,11 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const accuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
     event.status === "active" &&
     event.target?.toLowerCase() === activeSlot.toLowerCase() &&
-    (event.recipeId === 12 || event.payload.copiedEffectType === "accuracy_mode")
+    (
+      event.recipeId === 12 ||
+      event.payload.copiedEffectType === "accuracy_mode" ||
+      event.payload.wildcardWinCondition === "accuracy"
+    )
   ))
   const caramelUnlockedSlots = new Set(recipeEvents
     .filter((event) => event.status === "active" && event.recipeId === 21 && event.target)
