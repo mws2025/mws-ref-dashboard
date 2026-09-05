@@ -194,7 +194,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
 - [x] `POST /api/match/:id/score` normalizes HD scores by 1.06, resolves PS3 by lower miss count, and atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
 - [x] BanchoBot finish messages auto-fill score entry; refs can persist absolute star corrections with `POST /api/match/:id/match-score`.
-- [x] Completed map slots can be repicked as additional history rows; TB is restricted to mutual match point unless Caramel unlocks the wildcard.
+- [x] Completed map slots can be repicked as additional history rows; TB is restricted to mutual match point.
 - [x] Home-mod pools award one bonus ingredient to their owner on either a win or loss.
 - [x] `POST /api/match/:id/reset` clears match state while preserving the lobby; completed maps can be unpicked with reward reversal.
 - [x] `POST /api/match/:id/post-result` writes final `matches` result and completes flow state.
@@ -205,7 +205,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Every non-Freemod map allows optional HD through `!mp allowed_mods HD`; Sugar Cookies excludes HT while Custard retains it.
 - [x] Score announcements include both inventories, and a deciding score names the winner with GGWP without starting another timer.
 - [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
-- [x] Caramel draws from the dedicated `caramel_maps` sheet, validates map/mod/win-condition data, and keeps ScoreV2 while supporting accuracy winner comparison.
+- [x] Caramel draws across all dedicated `caramel_maps` rows, immediately creates/plays a `WC` map independent of TB, validates and applies the row's mod/win condition, and awards the winner's two choices during score settlement.
 - [x] Normal score reports verify per-player HD against osu! match history and remove the 1.06 multiplier before winner comparison.
 - [x] Parallel referee sessions have strict IRC channel isolation and atomic, title-correlated lobby creation.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.

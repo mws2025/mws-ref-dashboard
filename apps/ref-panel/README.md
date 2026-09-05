@@ -375,8 +375,8 @@ portal. Recipes are crafted during `craft` before a map is selected. RO32 uses t
 later rounds use four base bans total. Beignets can grant its explicit extra ban up to the four-ban absolute ceiling.
 After the base bans, both players choose home mods before crafting and picking. After the pick, call
 `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }`. Completed slots may be picked again; each replay is
-stored as another `match_maps` row. TB is rejected until both players are one point from victory, except when an active
-Caramel unlocks it as the wildcard slot. Use `action: "unpick"` to clear the latest picked or completed row and reverse
+stored as another `match_maps` row. TB is rejected until both players are one point from victory. Use `action: "unpick"`
+to clear the latest picked or completed row and reverse
 its map/recipe rewards; `unpick` does not require `player`.
 
 Map setup preserves the pool's required mods and sends `!mp allowed_mods HD` for NM/PS/HR/DT maps. Recipe-granted
@@ -394,7 +394,8 @@ optional mods are added to that command. FM/TB remain Freemod.
   "usesHdA": true,
   "usesHdB": false,
   "missCountA": 0,
-  "missCountB": 1
+  "missCountB": 1,
+  "rewardIngredients": ["egg", "milk"]
 }
 ```
 
@@ -403,7 +404,9 @@ For score win conditions, a side marked `usesHdA`/`usesHdB` is normalized with `
 score additions/multipliers and winner calculation. The portal exposes manual HD toggles; the integration test obtains
 the flags from each osu! score's mods automatically. `PS3` uses lower miss count, requires both nonnegative whole-number
 miss counts, and requests a replay when the miss counts tie. The integration route reads `statistics.count_miss` from
-osu!; manual score entry shows dedicated miss-count inputs.
+osu!; manual score entry shows dedicated miss-count inputs. When the active map was drawn by Caramel,
+`rewardIngredients` is required and must contain exactly two valid ingredients. They are awarded to the computed map
+winner as part of the same score settlement.
 Replay recipes return `replayRequired: true` on the first run, and any tied result also requests another replay. Submit
 the replay through the same endpoint. Repeating a request after a lost response returns the already-committed result
 instead of applying rewards twice. Match stars are written to `matches` in the same settlement. Otherwise,
@@ -424,8 +427,7 @@ the selected effect requires them:
   "modA": "HD",
   "modB": "HR",
   "targetSlot": "NM2",
-  "ingredient": "egg",
-  "rewardIngredients": ["egg", "milk"]
+  "ingredient": "egg"
 }
 ```
 
@@ -433,14 +435,16 @@ the selected effect requires them:
 - `modA` and `modB` are used by Custard.
 - `targetSlot` is used by map protection and unban effects.
 - `ingredient` is used by Omelette and Dough.
-- `rewardIngredients` must contain exactly two ingredients for Caramel.
 
 Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. An active
 Caramel locks both players out of further crafting. Crafting Caramel after another pending recipe refunds and reverts
-that recipe before Caramel is charged. Caramel selects only from validated `caramel_maps` rows and persists the selected
-beatmap, source slot/stage/year, mods, and win condition in its event payload. Blank `win_con` uses ScoreV2 score; `acc`
+that recipe before Caramel is charged. Caramel selects from all validated `caramel_maps` rows across MTT 2024 and MWS
+2025, creates a dedicated `WC` match-map entry, and immediately sets the drawn beatmap for play without using or
+requiring a TB slot. It persists the source slot/stage/year, mods, and win condition in its event payload. Blank
+`win_con` uses ScoreV2 score; `acc`
 uses the better accuracy to determine the map winner while the osu! lobby remains on ScoreV2. Blank `mod` applies no
-forced mod, while `double_time`, `hard_rock`, `easy`, `easy-double_time`, and `autopilot` map to Bancho mod acronyms.
+forced mod, so a source HR/DT map is played as NM unless its `mod` column explicitly says otherwise. The explicit
+`double_time`, `hard_rock`, `easy`, `easy-double_time`, and `autopilot` values map to Bancho mod acronyms.
 Magic Cake copies the opponent's latest `resolved` recipe, not
 an active or reverted event. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes
 are listed alphabetically.

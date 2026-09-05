@@ -4,7 +4,8 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import type { MatchFlowState, ScoreSubmissionDetails, TestMpBinding, TestMpProbe, TestMpResult } from "@/types"
+import { INGREDIENTS } from "@/data/constants"
+import type { IngKey, MatchFlowState, ScoreSubmissionDetails, TestMpBinding, TestMpProbe, TestMpResult } from "@/types"
 
 interface ScoreSubmitOutcome {
   replayRequired: boolean
@@ -21,6 +22,7 @@ interface Props {
   phase?: MatchFlowState["phase"]
   currentSlot?: string
   scoreSubmitting: boolean
+  wildcardRewardRequired?: boolean
   onBindingChange: (binding: TestMpBinding | undefined) => void
   onLobbyChange: (lobbyUrl: string) => void
   onApplyScore: (slot: string, scoreA: number, scoreB: number, details: ScoreSubmissionDetails) => Promise<ScoreSubmitOutcome | null>
@@ -59,6 +61,7 @@ export function TestSimPanel({
   phase,
   currentSlot,
   scoreSubmitting,
+  wildcardRewardRequired = false,
   onBindingChange,
   onLobbyChange,
   onApplyScore,
@@ -69,6 +72,7 @@ export function TestSimPanel({
   const [playerAId, setPlayerAId] = useState("")
   const [playerBId, setPlayerBId] = useState("")
   const [result, setResult] = useState<TestMpResult | null>(null)
+  const [rewardIngredients, setRewardIngredients] = useState<[IngKey | "", IngKey | ""]>(["", ""])
   const [busy, setBusy] = useState<"probe" | "bind" | "check" | "apply" | "skip" | "detach" | null>(null)
   const nextAction = nextIntegrationAction(binding, phase, currentSlot)
 
@@ -163,6 +167,7 @@ export function TestSimPanel({
     }
     onBindingChange(data.state.testBinding)
     setResult(null)
+    if (!keepExpected) setRewardIngredients(["", ""])
     return true
   }
 
@@ -178,6 +183,9 @@ export function TestSimPanel({
         usesHdB: result.values?.usesHdB ?? false,
         ...(result.values?.missCountMode && result.values.missCountA !== null && result.values.missCountB !== null
           ? { missCountA: result.values.missCountA, missCountB: result.values.missCountB }
+          : {}),
+        ...(wildcardRewardRequired && rewardIngredients[0] && rewardIngredients[1]
+          ? { rewardIngredients: rewardIngredients as [IngKey, IngKey] }
           : {}),
       })
       if (!outcome) return
@@ -311,8 +319,37 @@ export function TestSimPanel({
                   </div>
                 </div>
               )}
+              {wildcardRewardRequired && (
+                <div className="space-y-2 border-t border-border/60 pt-2">
+                  <p className="text-xs text-muted-foreground">Choose the two ingredients awarded to this map's winner.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[0, 1].map((index) => (
+                      <label key={index} className="space-y-1">
+                        <span className="text-[10px] text-muted-foreground">Winner reward {index + 1}</span>
+                        <select
+                          className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                          value={rewardIngredients[index]}
+                          onChange={(event) => setRewardIngredients((current) => {
+                            const next = [...current] as [IngKey | "", IngKey | ""]
+                            next[index] = event.target.value as IngKey | ""
+                            return next
+                          })}
+                        >
+                          <option value="">Select ingredient</option>
+                          {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-[1fr_auto] gap-2">
-                <Button size="sm" className="text-xs" disabled={!result.canApply || busy !== null || scoreSubmitting} onClick={() => void applyVerifiedResult()}>
+                <Button
+                  size="sm"
+                  className="text-xs"
+                  disabled={!result.canApply || busy !== null || scoreSubmitting || (wildcardRewardRequired && (!rewardIngredients[0] || !rewardIngredients[1]))}
+                  onClick={() => void applyVerifiedResult()}
+                >
                   <CheckCircle2 className="size-4" />{busy === "apply" ? "Applying..." : "Apply verified result"}
                 </Button>
                 <Button size="icon" variant="outline" disabled={busy !== null} onClick={() => void skipGame()} title="Skip this recorded game"><SkipForward className="size-4" /></Button>

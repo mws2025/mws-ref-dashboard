@@ -539,10 +539,34 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         toast.error(err.error ?? "Failed to use recipe")
         return
       }
-      const data = await res.json() as { state?: MatchFlowState }
+      const data = await res.json() as {
+        state?: MatchFlowState
+        event?: RecipeEvent
+        recipeSetup?: RecipePickSetup
+      }
       if (data.state) setFlowState(data.state)
+      const wildcardTitle = String(data.event?.payload.wildcardMap ?? "").trim()
+      const wildcardBeatmapId = String(data.event?.payload.wildcardBeatmapId ?? "").trim()
+      if (data.recipeSetup && data.event?.target === "WC" && wildcardTitle && wildcardBeatmapId) {
+        const wildcardMap: PoolMap = {
+          slot: "WC",
+          pool: "WC",
+          map: wildcardTitle,
+          beatmapId: wildcardBeatmapId,
+          bpm: 0,
+          ar: 0,
+          cs: 0,
+          status: "picked",
+          pickedBy: player,
+        }
+        setDetectedScores({ slot: "WC", run: 0 })
+        const channel = lobbyUrlToChannel(liveLobbyUrl)
+        if (channel) await sendPickSequence(wildcardMap, channel, data.recipeSetup)
+      }
       await refreshRecipeSurfaces()
-      toast.success(`${recipe.name} crafted`)
+      toast.success(wildcardTitle ? `${recipe.name} drew ${wildcardTitle}` : `${recipe.name} crafted`)
+    }).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "Failed to use recipe")
     })
   }
 
@@ -650,12 +674,16 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   }
 
   async function sendIrc(channel: string, message: string) {
-    await fetch("/api/irc/send", {
+    const response = await fetch("/api/irc/send", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ channel, message }),
     })
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as { error?: string } | null
+      throw new Error(data?.error ?? `IRC command failed (${response.status})`)
+    }
   }
 
   async function sendPickSequence(map: PoolMap, channel: string, recipeSetup?: RecipePickSetup) {
@@ -762,12 +790,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       event.payload.wildcardWinCondition === "accuracy"
     )
   ))
-  const caramelUnlockedSlots = new Set(recipeEvents
-    .filter((event) => event.status === "active" && event.recipeId === 21 && event.target)
-    .map((event) => event.target?.toLowerCase()))
+  const wildcardRewardRequired = Boolean(activeSlot && recipeEvents.some((event) =>
+    event.status === "active" &&
+    event.target?.toLowerCase() === activeSlot.toLowerCase() &&
+    (event.recipeId === 21 || event.payload.copiedEffectType === "wildcard_slot")
+  ))
   const selectedMapBlockedByTiebreaker = Boolean(selectedMap && (
-    (selectedMap.pool === "TB" && !tiebreakerReady && !caramelUnlockedSlots.has(selectedMap.slot.toLowerCase())) ||
-    (selectedMap.pool !== "TB" && tiebreakerReady)
+    (selectedMap.pool === "TB" && !tiebreakerReady) ||
+    (selectedMap.pool !== "TB" && selectedMap.pool !== "WC" && tiebreakerReady)
   ))
 
   return (
@@ -981,6 +1011,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                 scoreSubmitting={scoreSubmitting}
                 detectedScores={detectedScores.slot === flowState?.currentSlot ? detectedScores : undefined}
                 accuracyMode={accuracyMode}
+                wildcardRewardRequired={wildcardRewardRequired}
                 onSubmitScore={submitScore}
               />
               <Separator className="my-4" />
@@ -1038,6 +1069,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
                   phase={flowState?.phase}
                   currentSlot={flowState?.currentSlot}
                   scoreSubmitting={scoreSubmitting}
+                  wildcardRewardRequired={wildcardRewardRequired}
                   onBindingChange={(testBinding) => setFlowState((current) => current ? {
                     ...current,
                     phase: current.phase === "lobby" && testBinding ? "roll" : current.phase,
@@ -1089,7 +1121,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
             ? "This map is already locked."
             : selectedMapBlockedByTiebreaker
               ? selectedMap.pool === "TB"
-                ? "The tiebreaker opens at mutual match point or through Caramel."
+                ? "The tiebreaker opens at mutual match point."
                 : "Both players are at match point. Play the tiebreaker."
             : flowState?.currentSlot
               ? `Finish or unpick ${flowState.currentSlot} before choosing another map.`

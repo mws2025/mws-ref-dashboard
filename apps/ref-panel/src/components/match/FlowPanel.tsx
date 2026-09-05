@@ -3,8 +3,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
+import { INGREDIENTS } from "@/data/constants"
 import { isMissCountWinCondition, isValidRoll, parseScoreValue } from "@/lib/match-rules"
-import type { MatchFlowState, PoolMap, ScoreSubmissionDetails } from "@/types"
+import type { IngKey, MatchFlowState, PoolMap, ScoreSubmissionDetails } from "@/types"
 
 interface Props {
   state: MatchFlowState | null
@@ -24,6 +25,7 @@ interface Props {
   scoreSubmitting?: boolean
   detectedScores?: { a?: number; b?: number; run: number }
   accuracyMode?: boolean
+  wildcardRewardRequired?: boolean
   onSubmitScore: (slot: string, scoreA: number, scoreB: number, details: ScoreSubmissionDetails) => void
 }
 
@@ -63,6 +65,7 @@ export function FlowPanel({
   scoreSubmitting = false,
   detectedScores,
   accuracyMode = false,
+  wildcardRewardRequired = false,
   onSubmitScore,
 }: Props) {
   const currentMap = !mappool
@@ -79,6 +82,8 @@ export function FlowPanel({
     usesHdB?: boolean
     missCountA?: string
     missCountB?: string
+    rewardA?: IngKey | ""
+    rewardB?: IngKey | ""
   }>({ slot: "" })
   const [rollEntry, setRollEntry] = useState<{ a?: string; b?: string }>({})
 
@@ -115,7 +120,10 @@ export function FlowPanel({
   const scoresWithinRange = !accuracyMode || (
     parsedScoreA !== null && parsedScoreB !== null && parsedScoreA <= 100 && parsedScoreB <= 100
   )
-  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange && validMissCounts
+  const rewardA = scoreEntry.slot === currentSlotKey ? scoreEntry.rewardA ?? "" : ""
+  const rewardB = scoreEntry.slot === currentSlotKey ? scoreEntry.rewardB ?? "" : ""
+  const validWildcardRewards = !wildcardRewardRequired || (Boolean(rewardA) && Boolean(rewardB))
+  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange && validMissCounts && validWildcardRewards
 
   return (
     <div className="space-y-4">
@@ -323,6 +331,33 @@ export function FlowPanel({
           {accuracyMode && !scoresWithinRange && (
             <p className="text-xs text-destructive">Accuracy must be between 0% and 100%.</p>
           )}
+          {wildcardRewardRequired && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Choose the two ingredients awarded to this map's winner.</p>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ["Winner reward 1", "rewardA", rewardA],
+                  ["Winner reward 2", "rewardB", rewardB],
+                ] as const).map(([label, key, value]) => (
+                  <label key={key} className="space-y-1">
+                    <span className="text-[10px] text-muted-foreground">{label}</span>
+                    <select
+                      className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-xs"
+                      value={value}
+                      onChange={(event) => setScoreEntry((current) => ({
+                        ...current,
+                        slot: currentSlotKey,
+                        [key]: event.target.value as IngKey | "",
+                      }))}
+                    >
+                      <option value="">Select ingredient</option>
+                      {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <Button
             size="sm"
             className="w-full text-xs"
@@ -336,6 +371,9 @@ export function FlowPanel({
                 usesHdB: scoreEntry.slot === currentSlotKey && Boolean(scoreEntry.usesHdB),
                 ...(missCountMode && parsedMissCountA !== null && parsedMissCountB !== null
                   ? { missCountA: parsedMissCountA, missCountB: parsedMissCountB }
+                  : {}),
+                ...(wildcardRewardRequired && rewardA && rewardB
+                  ? { rewardIngredients: [rewardA, rewardB] as [IngKey, IngKey] }
                   : {}),
               },
             )}

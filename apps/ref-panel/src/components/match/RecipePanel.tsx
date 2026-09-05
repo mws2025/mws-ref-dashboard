@@ -151,6 +151,14 @@ function RecipeEvents({
       {entries.slice().reverse().map((entry) => {
         const recipe = RECIPES.find((candidate) => candidate.id === entry.recipeId)
         if (!recipe) return null
+        const wildcardMap = String(entry.payload.wildcardMap ?? "").trim()
+        const wildcardSource = [
+          entry.payload.wildcardMappoolYear,
+          entry.payload.wildcardSourceRound,
+          entry.payload.wildcardSourceSlot,
+        ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" · ")
+        const wildcardWinCondition = entry.payload.wildcardWinCondition === "accuracy" ? "Accuracy" : "ScoreV2"
+        const wildcardMod = String(entry.payload.wildcardMod ?? "").trim() || "NM"
         return (
           <div key={entry.id} className="rounded-md border border-border/70 bg-card/35 px-3 py-2">
             <div className="flex items-start justify-between gap-2">
@@ -160,6 +168,12 @@ function RecipeEvents({
                   {entry.status}
                   {entry.target ? ` · ${entry.target}` : ""}
                 </p>
+                {wildcardMap && (
+                  <div className="mt-1.5 space-y-0.5 text-[10px] text-foreground/75">
+                    <p>{wildcardMap}</p>
+                    <p className="text-muted-foreground">{wildcardSource} · {wildcardMod} · {wildcardWinCondition}</p>
+                  </div>
+                )}
               </div>
               {entry.status === "active" && !entry.activatedAt && onUndo && (
                 <Button size="xs" variant="ghost" onClick={() => onUndo(entry.id)}>
@@ -333,28 +347,6 @@ export function RecipePanel({
                 {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
               </NativeSelect>
             </label>
-          )}
-
-          {inputs.includes("reward_ingredients") && (
-            <div className="grid grid-cols-2 gap-2">
-              {[0, 1].map((index) => (
-                <label key={index} className="space-y-1">
-                  <span className="text-xs text-muted-foreground">Winner reward {index + 1}</span>
-                  <NativeSelect
-                    value={activation.rewardIngredients?.[index] ?? ""}
-                    onChange={(value) => {
-                      const current = activation.rewardIngredients ?? ["" as IngKey, "" as IngKey]
-                      const next = [...current] as [IngKey, IngKey]
-                      next[index] = value as IngKey
-                      setActivation((state) => ({ ...state, rewardIngredients: next }))
-                    }}
-                  >
-                    <option value="">Select ingredient</option>
-                    {INGREDIENTS.map((ingredient) => <option key={ingredient.key} value={ingredient.key}>{ingredient.name}</option>)}
-                  </NativeSelect>
-                </label>
-              ))}
-            </div>
           )}
 
           <DialogFooter>

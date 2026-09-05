@@ -1,10 +1,10 @@
-export type Pool = "NM" | "PS" | "HR" | "DT" | "FM" | "TB"
+export type Pool = "NM" | "PS" | "HR" | "DT" | "FM" | "TB" | "WC"
 export type MapStatus = "available" | "picked" | "banned" | "protected" | "in-progress" | "completed"
 export type MatchStatus = "scheduled" | "upcoming" | "live" | "completed" | "forfeit"
 export type IngKey = "egg" | "sugar" | "butter" | "flour" | "milk"
 export type Inventory = Record<IngKey, number>
 export type RecipeEventStatus = "active" | "resolved" | "reverted"
-export type RecipeInputKind = "mod" | "mods_both" | "protect_map" | "unban_map" | "ingredient" | "reward_ingredients"
+export type RecipeInputKind = "mod" | "mods_both" | "protect_map" | "unban_map" | "ingredient"
 export type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
 export type MatchFlowPhase =
   | "lobby"
@@ -47,7 +47,6 @@ export interface RecipeActivation {
   modB?: string
   targetSlot?: string
   ingredient?: IngKey
-  rewardIngredients?: [IngKey, IngKey]
 }
 
 export interface ScoreSubmissionDetails {
@@ -55,6 +54,7 @@ export interface ScoreSubmissionDetails {
   usesHdB: boolean
   missCountA?: number
   missCountB?: number
+  rewardIngredients?: [IngKey, IngKey]
 }
 
 export interface RecipeEvent {

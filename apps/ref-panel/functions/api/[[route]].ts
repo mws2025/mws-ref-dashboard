@@ -345,6 +345,7 @@ const SESSION_COOKIE_NAME = "mws_ref_session"
 const OAUTH_STATE_COOKIE_NAME = "mws_osu_oauth_state"
 const SESSION_TTL_SECONDS = 60 * 60 * 12
 const MATCH_STATE_SHEET = "match_state"
+const CARAMEL_SLOT = "WC"
 const MATCH_STATE_HEADERS = [
   "match_id",
   "phase",
@@ -2430,11 +2431,12 @@ app.get("/api/match/:matchId/mappool", async (c) => {
   const playerB   = c.req.query("playerB") ?? ""
 
   try {
-    const [poolValues, matchMapValues, matchValues, stateValues] = await getSheetValuesBatch(c.env, [
+    const [poolValues, matchMapValues, matchValues, stateValues, itemEventValues] = await getSheetValuesBatch(c.env, [
       "mappool!A1:Z",
       "match_maps!A1:Z",
       "matches!A1:Z",
       `${MATCH_STATE_SHEET}!A1:Z`,
+      "item_events!A1:ZZ",
     ])
 
     const poolRecords     = sheetRowsToRecords(poolValues)
@@ -2461,6 +2463,34 @@ app.get("/api/match/:matchId/mappool", async (c) => {
         winner:    ov?.["winner"]?.trim() || undefined,
       }
     })
+
+    const latestCaramel = sheetRowsToRecords(itemEventValues)
+      .map(parseRecipeEventRecord)
+      .filter((event): event is RecipeEventRecord =>
+        event !== null &&
+        event.matchId === matchId &&
+        event.status !== "reverted" &&
+        Boolean(event.payload.wildcardBeatmapId),
+      )
+      .at(-1)
+    if (latestCaramel) {
+      const wildcardSlot = latestCaramel.target || CARAMEL_SLOT
+      const wildcardOverride = overrides.get(wildcardSlot.toLowerCase())
+      const source = [
+        latestCaramel.payload.wildcardMappoolYear,
+        latestCaramel.payload.wildcardSourceRound,
+        latestCaramel.payload.wildcardSourceSlot,
+      ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" · ")
+      mappool.push({
+        slot: wildcardSlot,
+        pool: "WC",
+        map: `${String(latestCaramel.payload.wildcardMap ?? "Caramel wildcard")}${source ? ` (${source})` : ""}`,
+        beatmapId: String(latestCaramel.payload.wildcardBeatmapId),
+        status: wildcardOverride?.status?.trim() || (latestCaramel.status === "resolved" ? "completed" : "picked"),
+        pickedBy: wildcardOverride?.picked_by?.trim() || latestCaramel.player,
+        winner: wildcardOverride?.winner?.trim() || undefined,
+      })
+    }
 
     const matchMaps = matchMapRecords.filter((r) => r["match_id"]?.trim() === matchId)
     const countedScoreA = countCompletedWins(matchMaps, matchId, playerA)
@@ -3076,6 +3106,9 @@ app.post("/api/match/:matchId/score", async (c) => {
   }
   const missCountA = parsedMissCount(body.missCountA)
   const missCountB = parsedMissCount(body.missCountB)
+  const wildcardRewards = Array.isArray(body.rewardIngredients)
+    ? body.rewardIngredients.map((value) => String(value).trim().toLowerCase())
+    : []
   if (!slot || !playerA || !playerB || rawScoreA === null || rawScoreB === null) {
     return c.json({ error: "slot, playerA, playerB, scoreA, and scoreB required" }, 400)
   }
@@ -3206,6 +3239,13 @@ app.post("/api/match/:matchId/score", async (c) => {
       ...itemPayload(itemForEvent(items, event) ?? {}),
       ...event.payload,
     })
+    const wildcardEvent = activeEvents.find((event) => effect(event) === "wildcard_slot")
+    if (wildcardEvent && (
+      wildcardRewards.length !== 2 ||
+      wildcardRewards.some((value) => !INVENTORY_KEYS.includes(value as IngredientKey))
+    )) {
+      return c.json({ error: "Choose exactly two ingredients for the Caramel map winner" }, 400)
+    }
     const poolRecords = sheetRowsToRecords(poolValues)
     const accuracyMode = activeEvents.some((event) =>
       effect(event) === "accuracy_mode" ||
@@ -3213,7 +3253,6 @@ app.post("/api/match/:matchId/score", async (c) => {
     )
     let hdDetection: "manual" | "osu_api" = "manual"
     if (!accuracyMode) {
-      const wildcardEvent = activeEvents.find((event) => effect(event) === "wildcard_slot")
       const poolRecord = poolRecords.find((record) =>
         samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
         (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
@@ -3473,16 +3512,13 @@ app.post("/api/match/:matchId/score", async (c) => {
           resolution.triggered = false
         }
       } else if (effectType === "wildcard_slot") {
-        const rewards = Array.isArray(payload.rewardIngredients) ? payload.rewardIngredients : []
         const delta: Partial<InventoryMap> = {}
-        for (const raw of rewards) {
+        for (const raw of wildcardRewards) {
           const reward = String(raw) as IngredientKey
           if (INVENTORY_KEYS.includes(reward)) delta[reward] = (delta[reward] ?? 0) + 1
         }
-        if (Object.keys(delta).length > 0) {
-          applyDelta(winner, delta)
-          resolution.rewardIngredients = rewards
-        }
+        applyDelta(winner, delta)
+        resolution.rewardIngredients = wildcardRewards
       }
 
       if (effectType === "accuracy_mode" || effectType === "scoring_mode") {
@@ -3849,8 +3885,12 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     const item = itemRecords.find((record) => firstValue(record, ["item_id", "id"]) === recipeId)
     if (!item) return c.json({ error: "Recipe not found" }, 404)
     if (firstValue(item, ["enabled"]).toLowerCase() === "false") return c.json({ error: "Recipe disabled" }, 409)
-    const flowState = await getMatchFlowState(c.env, matchId, true)
-    const matchMapRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "match_maps!A1:Z"))
+    const [flowState, matchMapValues, configMap] = await Promise.all([
+      getMatchFlowState(c.env, matchId, true),
+      getSheetValuesSafe(c.env, "match_maps!A1:Z"),
+      getConfigMap(c.env),
+    ])
+    const matchMapRecords = sheetRowsToRecords(matchMapValues)
     const countedScoreA = countCompletedWins(matchMapRecords, matchId, match.playerA)
     const countedScoreB = countCompletedWins(matchMapRecords, matchId, match.playerB)
     const currentScoreA = flowState.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedScoreA)
@@ -3873,6 +3913,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     }
 
     const baseEffectType = firstValue(item, ["effect_type"])
+    const eventId = randomHex(8)
     let effectType = baseEffectType
     let effectPayload = itemPayload(item)
     let target = typeof body.targetSlot === "string" ? body.targetSlot.trim() : ""
@@ -3971,21 +4012,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     }
 
     if (effectType === "wildcard_slot") {
-      const rewardSource = Array.isArray(body.rewardIngredients)
-        ? body.rewardIngredients.map((value) => String(value).trim().toLowerCase())
-        : Array.isArray(effectPayload.rewardIngredients)
-          ? effectPayload.rewardIngredients.map((value) => String(value).trim().toLowerCase())
-          : []
-      const rewards = rewardSource
-      if (rewards.length !== 2 || rewards.some((value) => !INVENTORY_KEYS.includes(value as IngredientKey))) {
-        return c.json({ error: "Choose exactly two wildcard reward ingredients" }, 400)
-      }
-      const wildcard = matchPoolRecords.find((record) => {
-        const slot = firstValue(record, ["map_id", "slot"])
-        return firstValue(record, ["mod_pool", "pool"]).toUpperCase() === "TB" && mapStatus(slot) === "available"
-      })
-      target = firstValue(wildcard ?? {}, ["map_id", "slot"])
-      if (!target) return c.json({ error: "No available wildcard/TB slot exists in this mappool" }, 409)
+      target = CARAMEL_SLOT
       const caramelRecords = sheetRowsToRecords(await getSheetValuesSafe(c.env, "caramel_maps!A1:Z"))
       const randomCandidates = caramelRecords.flatMap((record) => {
         const pickId = firstValue(record, ["pick_id"])
@@ -4008,7 +4035,6 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       const randomBytes = new Uint32Array(1)
       crypto.getRandomValues(randomBytes)
       const randomMap = randomCandidates[(randomBytes[0] ?? 0) % randomCandidates.length]
-      activationPayload.rewardIngredients = rewards
       activationPayload.wildcardSlot = target
       activationPayload.wildcardBeatmapId = randomMap?.beatmapId
       activationPayload.wildcardMap = randomMap?.title
@@ -4101,7 +4127,6 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     const next = { ...current }
     for (const key of INVENTORY_KEYS) next[key] -= cost[key]
     let inventory = await writeInventoryAbsolute(c.env, matchId, player, next, sessionUser?.username ?? "unknown", "recipe_cost")
-    const eventId = randomHex(8)
     const immediate = ["none", "protect_map", "unban_map", "steal_ingredient"].includes(effectType)
     const payload = { ...effectPayload, ...activationPayload }
     const resolution: Record<string, unknown> = {}
@@ -4135,14 +4160,58 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       resolved_at: immediate ? now : "",
       resolution: JSON.stringify(resolution),
     })
-    const nextState = effectType === "extra_ban"
-      ? await writeMatchFlowState(c.env, {
+    let recipeSetup: RecipePickSetup | undefined
+    let nextState: MatchFlowState
+    if (effectType === "wildcard_slot") {
+      const matchMapHeaders = matchMapValues[0]?.map(normalizeHeader)
+      if (!matchMapHeaders) throw new Error("match_maps sheet empty")
+      const wildcardMapRecord: Record<string, string> = {
+        match_id: matchId,
+        slot: target,
+        map_id: target,
+        picked_by: player,
+        status: "picked",
+      }
+      await appendSheetRow(c.env, "match_maps", matchMapHeaders.map((header) => wildcardMapRecord[header] ?? ""))
+      recipeSetup = await activateRecipesForPick(c.env, matchId, player, target, "WC", match.playerA, match.playerB)
+      const expectedBeatmapId = Number(recipeSetup.beatmapId)
+      const scoringCommand = recipeSetup.commandsBefore
+        .map((command) => command.match(/^!mp set\s+\d+\s+(\d+)/i)?.[1])
+        .find((value) => value !== undefined)
+      const expectedScoringType = scoringTypeForInt(
+        scoringCommand === undefined ? scoringModeToInt(configMap.get("scoring") ?? "") : Number(scoringCommand),
+      )
+      const testBinding = isTestMode(configMap) && flowState.testBinding && Number.isSafeInteger(expectedBeatmapId)
+        ? {
+            ...flowState.testBinding,
+            expected: {
+              slot: target,
+              beatmapId: expectedBeatmapId,
+              lobbyMods: recipeSetup.mods,
+              playerAMods: recipeSetup.playerAMods,
+              playerBMods: recipeSetup.playerBMods,
+              scoringType: expectedScoringType,
+              winCondition: recipeSetup.winCondition,
+            },
+          }
+        : flowState.testBinding
+      nextState = await writeMatchFlowState(c.env, {
+        ...flowState,
+        phase: "play",
+        turnPlayer: player,
+        currentSlot: target,
+        testBinding,
+      })
+    } else if (effectType === "extra_ban") {
+      nextState = await writeMatchFlowState(c.env, {
           ...flowState,
           phase: "ban",
           turnPlayer: player,
           currentSlot: undefined,
         })
-      : flowState
+    } else {
+      nextState = flowState
+    }
     await appendAuditLog(
       c.env,
       sessionUser?.username ?? "unknown",
@@ -4168,6 +4237,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       },
       inventory,
       state: nextState,
+      recipeSetup,
     })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Recipe use failed" }, 500)
@@ -4961,22 +5031,10 @@ app.post("/api/match/:matchId/action", async (c) => {
     if (action === "pick") {
       const isTiebreaker = slot.toUpperCase().startsWith("TB")
       const tiebreakerReady = isTiebreakerReady(currentScoreA, currentScoreB, match.bestOf ?? 5)
-      let wildcardUnlocked = false
       if (isTiebreaker && !tiebreakerReady) {
-        const [recipeEvents, recipeItems] = await Promise.all([
-          getRecipeEvents(c.env, matchId),
-          getItemRecords(c.env),
-        ])
-        wildcardUnlocked = recipeEvents.some((event) =>
-          event.status === "active" &&
-          samePlayer(event.target, slot) &&
-          effectTypeForEvent(recipeItems, event) === "wildcard_slot"
-        )
+        return c.json({ error: "The tiebreaker is only available at mutual match point" }, 409)
       }
-      if (isTiebreaker && !tiebreakerReady && !wildcardUnlocked) {
-        return c.json({ error: "The tiebreaker is only available at mutual match point or through Caramel" }, 409)
-      }
-      if (!isTiebreaker && tiebreakerReady) {
+      if (!isTiebreaker && slot.toUpperCase() !== CARAMEL_SLOT && tiebreakerReady) {
         return c.json({ error: "Both players are at match point; the tiebreaker must be played" }, 409)
       }
     }
