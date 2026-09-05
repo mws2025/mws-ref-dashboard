@@ -21,6 +21,8 @@ const joinedChannels = new Set<string>()
 const irc = new Client()
 let ircConnected = false
 let makeQueue: Promise<void> = Promise.resolve()
+const inflightMakes = new Map<string, Promise<{ mpId: string; lobbyUrl: string }>>()
+const recentMakes = new Map<string, { title: string; mpId: string; lobbyUrl: string; expiresAt: number }>()
 
 function isLobbyChannel(value: string): boolean {
   return /^#mp_\d+$/.test(value)
@@ -148,6 +150,24 @@ async function enqueueLobbyCreation(title: string): Promise<{ mpId: string; lobb
   }
 }
 
+function requestLobbyCreation(requestKey: string, title: string): Promise<{ mpId: string; lobbyUrl: string }> {
+  const recent = recentMakes.get(requestKey)
+  if (recent && recent.title === title && recent.expiresAt > Date.now()) {
+    return Promise.resolve({ mpId: recent.mpId, lobbyUrl: recent.lobbyUrl })
+  }
+  const inflight = inflightMakes.get(requestKey)
+  if (inflight) return inflight
+
+  const request = enqueueLobbyCreation(title)
+  inflightMakes.set(requestKey, request)
+  void request.then((lobby) => {
+    recentMakes.set(requestKey, { title, ...lobby, expiresAt: Date.now() + 60_000 })
+  }).catch(() => {}).finally(() => {
+    inflightMakes.delete(requestKey)
+  })
+  return request
+}
+
 function checkAuth(req: Request): boolean {
   return req.headers.get("x-relay-secret") === IRC_RELAY_SECRET
 }
@@ -165,13 +185,14 @@ const server = Bun.serve({
     if (!checkAuth(req)) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
     if (req.method === "POST" && url.pathname === "/make") {
-      let body: { title?: string }
+      let body: { requestKey?: string; title?: string }
       try { body = await req.json() } catch { return Response.json({ error: "Invalid JSON" }, { status: 400 }) }
+      const requestKey = body.requestKey?.trim() ?? ""
       const title = body.title?.trim() ?? ""
-      if (!title) return Response.json({ error: "title required" }, { status: 400 })
+      if (!requestKey || !title) return Response.json({ error: "requestKey and title required" }, { status: 400 })
       if (!ircConnected) return Response.json({ error: "IRC not connected" }, { status: 503 })
       try {
-        const lobby = await enqueueLobbyCreation(title)
+        const lobby = await requestLobbyCreation(requestKey, title)
         return Response.json({ ok: true, title, ...lobby })
       } catch (error) {
         return Response.json({ error: error instanceof Error ? error.message : "Lobby creation failed" }, { status: 504 })

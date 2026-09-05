@@ -4578,7 +4578,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     method: "POST",
     redirect: "manual",
     headers: { "Content-Type": "application/json", "X-Relay-Secret": relaySecret },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ requestKey: matchId, title }),
   })
   if (!makeRes.ok) {
     const reason = (await makeRes.text()).slice(0, 300)
