@@ -437,10 +437,12 @@ the selected effect requires them:
 - `ingredient` is used by Omelette and Dough.
 
 Every recipe is crafted during `craft` before map selection. Recipes are disabled for the real tiebreaker. An active
-Caramel locks both players out of further crafting. Crafting Caramel after another pending recipe refunds and reverts
-that recipe before Caramel is charged. Caramel selects from all validated `caramel_maps` rows across MTT 2024 and MWS
-2025, creates a dedicated `WC` match-map entry, and immediately sets the drawn beatmap for play without using or
-requiring a TB slot. It persists the source slot/stage/year, mods, and win condition in its event payload. Blank
+Caramel locks both players out of further crafting. Crafting Caramel after another active, pending recipe refunds its
+full cost and reverts that event before Caramel is charged. Only one Caramel can be active. Caramel selects from all
+validated `caramel_maps` rows across MTT 2024 and MWS 2025, choosing randomly among the globally least-used maps to
+avoid repeats across matches until the list cycles. It creates a dedicated `WC` match-map entry and immediately sets
+the drawn beatmap for play without using or requiring a TB slot. It persists the source slot/stage/year, mods, and win
+condition in its event payload and announces the draw, applied mod, and win condition in lobby chat. Blank
 `win_con` uses ScoreV2 score; `acc`
 uses the better accuracy to determine the map winner while the osu! lobby remains on ScoreV2. Blank `mod` applies no
 forced mod, so a source HR/DT map is played as NM unless its `mod` column explicitly says otherwise. The explicit
@@ -448,6 +450,9 @@ forced mod, so a source HR/DT map is played as NM unless its `mod` column explic
 Magic Cake copies the opponent's latest `resolved` recipe, not
 an active or reverted event. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes
 are listed alphabetically.
+
+`POST /api/irc/send` prefixes every non-command lobby message with the authenticated referee's osu! username as
+`<username> message`. Messages beginning with `!` are sent unchanged so BanchoBot commands continue to work.
 
 For normal score win conditions, score submission cross-checks the matching finished osu! game by lobby, beatmap,
 player IDs, and raw scores. HD usage from osu! match history is authoritative and each HD score is divided by `1.06`
@@ -471,8 +476,8 @@ Other mutation bodies:
 | `POST /api/match/:matchId/forfeit` | `{ "winner": "...", "playerA": "...", "playerB": "..." }` |
 
 The result webhook includes the final score and canonical osu! community match URL, bans grouped by side, both home
-mods, the chronological pick/winner rundown, recipe names with their target slots, and the osu! API-derived duration
-when available.
+mods, the chronological pick/winner rundown, an always-present recipes-used section, Caramel draw details, and the
+osu! API-derived duration when available.
 
 Test mode suppresses live IRC and lobby transport where marked in the implementation. Its Integration tab reads actual
 osu! MP history, while Sheet-backed match, inventory, score, recipe, cursor, and result writes remain authoritative.

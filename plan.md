@@ -205,7 +205,8 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Every non-Freemod map allows optional HD through `!mp allowed_mods HD`; Sugar Cookies excludes HT while Custard retains it.
 - [x] Score announcements include both inventories, and a deciding score names the winner with GGWP without starting another timer.
 - [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
-- [x] Caramel draws across all dedicated `caramel_maps` rows, immediately creates/plays a `WC` map independent of TB, validates and applies the row's mod/win condition, and awards the winner's two choices during score settlement.
+- [x] Caramel draws randomly among the globally least-used maps across all dedicated `caramel_maps` rows, immediately creates/plays a `WC` map independent of TB, announces and applies the row's mod/win condition, refunds pending recipes, and awards the winner's two choices during score settlement.
+- [x] IRC prefixes non-command messages with the authenticated referee username while leaving BanchoBot commands unchanged.
 - [x] Normal score reports verify per-player HD against osu! match history and remove the 1.06 multiplier before winner comparison.
 - [x] Parallel referee sessions have strict IRC channel isolation and atomic, title-correlated lobby creation.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.

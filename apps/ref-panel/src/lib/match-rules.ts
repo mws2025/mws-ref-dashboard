@@ -91,6 +91,7 @@ export type MatchResultRecipeEntry = {
   player: string
   name: string
   target?: string
+  details?: string
 }
 
 export type MatchResultSections = {
@@ -142,7 +143,8 @@ export function formatMatchResultSections(
     .filter((recipe) => recipe.name)
     .map((recipe) => {
       const target = recipe.target ? ` \`${recipe.target}\`` : ""
-      return `${emojiFor(recipe.player)} ${recipe.name}${target}`
+      const details = recipe.details ? ` - ${recipe.details}` : ""
+      return `${emojiFor(recipe.player)} ${recipe.name}${target}${details}`
     })
 
   return {
@@ -272,6 +274,11 @@ export function caramelWinCondition(value: string): CaramelWinCondition | null {
   if (!normalized || normalized === "score" || normalized === "scorev2") return "score"
   if (normalized === "acc" || normalized === "accuracy") return "accuracy"
   return null
+}
+
+export function formatRefereeIrcMessage(username: string, message: string): string {
+  const trimmed = message.trim()
+  return trimmed.startsWith("!") ? trimmed : `<${username.trim() || "Referee"}> ${trimmed}`
 }
 
 export function addLobbyMod(base: string, mod: string, enforceNF: boolean): string {

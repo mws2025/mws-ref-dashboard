@@ -8,6 +8,7 @@ import {
   canClaimRefereeAssignment,
   compareMapResults,
   formatMatchResultSections,
+  formatRefereeIrcMessage,
   formatScheduleDateTime,
   formatScheduleTimeInput,
   formatLobbyTitle,
@@ -205,6 +206,11 @@ describe("referee input and lobby formatting", () => {
     expect(parseCreatedLobbyAnnouncement(announcement, titleA)).toBe("121808612")
     expect(parseCreatedLobbyAnnouncement(announcement, titleB)).toBeNull()
   })
+
+  test("prefixes referee chat but leaves BanchoBot commands unchanged", () => {
+    expect(formatRefereeIrcMessage("Ref One", "Players ready?")).toBe("<Ref One> Players ready?")
+    expect(formatRefereeIrcMessage("Ref One", "  !mp timer 120  ")).toBe("!mp timer 120")
+  })
 })
 
 describe("match result formatting", () => {
@@ -220,12 +226,15 @@ describe("match result formatting", () => {
         { slot: "FM1", status: "completed", pickedBy: "Fuma", winner: "teffek" },
         { slot: "PS3", status: "completed", pickedBy: "Fuma", winner: "Fuma" },
       ],
-      [{ player: "teffek", name: "Crepe", target: "PS3" }],
+      [
+        { player: "teffek", name: "Crepe", target: "PS3" },
+        { player: "Fuma", name: "Caramel", target: "WC", details: "(2025) - HR2 - Wildcard Song" },
+      ],
     )).toEqual({
       bans: "🔴 bans `DT1`\n🔵 bans `DT3`",
       homeMods: "🔴 `HR`\n🔵 `PS`",
       rundown: "🔵 picks `FM1` - 🔴 wins!\n🔵 picks `PS3` - 🔵 wins!",
-      recipes: "🔴 Crepe `PS3`",
+      recipes: "🔴 Crepe `PS3`\n🔵 Caramel `WC` - (2025) - HR2 - Wildcard Song",
     })
   })
 })

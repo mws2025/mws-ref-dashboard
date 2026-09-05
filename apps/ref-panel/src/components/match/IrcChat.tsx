@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { IRC_BOT } from "@/data/mock"
 import { lobbyInviteTarget } from "@/lib/match-rules"
@@ -31,7 +32,7 @@ interface Props {
 }
 
 export const IrcChat = forwardRef<IrcChatHandle, Props>(function IrcChat(
-  { channel, refName, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, isTestMode = false, nextActionHint, simulatedMessages, onMessagesChange, onNewMessage },
+  { channel, playerA, playerB, playerAOsuId, playerBOsuId, isDemo = false, isTestMode = false, nextActionHint, simulatedMessages, onMessagesChange, onNewMessage },
   ref
 ) {
   const [messages, setMessages] = useState<LiveMsg[]>([])
@@ -95,15 +96,17 @@ async function send(override?: string) {
     if (!msg || !channel || sending) return
     setSending(true)
     try {
-      await fetch("/api/irc/send", {
+      const response = await fetch("/api/irc/send", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ channel, message: msg }),
       })
+      const data = await response.json().catch(() => null) as { error?: string; message?: string } | null
+      if (!response.ok) throw new Error(data?.error ?? `IRC send failed (${response.status})`)
       setMessages((prev) => [
         ...prev,
-        { ts: new Date().toISOString(), from: IRC_BOT, message: `<${refName}>: ${msg}`, local: true },
+        { ts: new Date().toISOString(), from: IRC_BOT, message: data?.message ?? msg, local: true },
       ])
       if (!override) setDraft("")
 
@@ -118,6 +121,8 @@ async function send(override?: string) {
       if (/^!mp\s+aborttimer/i.test(msg) || /^!mp\s+start/i.test(msg)) {
         setTimerEndsAt(null)
       }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "IRC send failed")
     } finally {
       setSending(false)
     }

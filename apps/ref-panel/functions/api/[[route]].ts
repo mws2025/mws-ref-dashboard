@@ -11,6 +11,7 @@ import {
   formatMatchResultSections,
   formatLobbyMods,
   formatLobbyTitle,
+  formatRefereeIrcMessage,
   hdUsageFromScoreReport,
   homeModIngredientAwards,
   isBanLimitReached,
@@ -1698,10 +1699,29 @@ async function getRecipeEvents(
   matchId: string,
   ensureHeaders = true,
 ): Promise<RecipeEventRecord[]> {
+  return (await getAllRecipeEvents(env, ensureHeaders))
+    .filter((event) => event.matchId === matchId)
+}
+
+async function getAllRecipeEvents(
+  env: Bindings,
+  ensureHeaders = true,
+): Promise<RecipeEventRecord[]> {
   if (ensureHeaders) await ensureSheetWithHeaders(env, "item_events", ITEM_EVENT_HEADERS)
   return sheetRowsToRecords(await getSheetValuesSafe(env, "item_events!A1:ZZ"))
     .map(parseRecipeEventRecord)
-    .filter((event): event is RecipeEventRecord => event !== null && event.matchId === matchId)
+    .filter((event): event is RecipeEventRecord => event !== null)
+}
+
+function secureRandomIndex(length: number): number {
+  if (!Number.isSafeInteger(length) || length < 1) throw new Error("Random selection requires at least one candidate")
+  const range = 0x1_0000_0000
+  const ceiling = Math.floor(range / length) * length
+  const randomBytes = new Uint32Array(1)
+  do {
+    crypto.getRandomValues(randomBytes)
+  } while ((randomBytes[0] ?? 0) >= ceiling)
+  return (randomBytes[0] ?? 0) % length
 }
 
 async function appendSheetRecord(
@@ -2018,7 +2038,16 @@ async function activateRecipesForPick(
         if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
       }
       if (payload.wildcardWinCondition === "accuracy") winCondition = "accuracy"
-      if (mapTitle) notices.push(`Caramel wildcard: ${mapTitle}`)
+      if (mapTitle) {
+        const year = String(payload.wildcardMappoolYear ?? "Unknown year").trim()
+        const sourceSlot = String(payload.wildcardSourceSlot ?? "Unknown pick").trim()
+        const appliedMods = typeof wildcardMod === "string"
+          ? caramelLobbyMods(wildcardMod, false)
+          : null
+        const modLabel = !appliedMods || appliedMods === "None" ? "NM (none)" : appliedMods
+        notices.push(`Caramel map: (${year}) - ${sourceSlot} - ${mapTitle}`)
+        notices.push(`Mod applied: ${modLabel} - Win condition: ${winCondition === "accuracy" ? "Accuracy" : "Score"}`)
+      }
     }
   }
 
@@ -3756,6 +3785,14 @@ async function buildAndPostResultEmbed(
       player: firstValue(record, ["player_id", "player"]),
       name: itemNameMap.get(firstValue(record, ["item_id"])) ?? firstValue(record, ["item_id"]),
       target: firstValue(record, ["target"]),
+      details: (() => {
+        const payload = parseJsonRecord(firstValue(record, ["payload"]))
+        const title = String(payload.wildcardMap ?? "").trim()
+        if (!title) return undefined
+        const year = String(payload.wildcardMappoolYear ?? "Unknown year").trim()
+        const sourceSlot = String(payload.wildcardSourceSlot ?? "Unknown pick").trim()
+        return `(${year}) - ${sourceSlot} - ${title}`
+      })(),
     })),
   )
 
@@ -3775,7 +3812,7 @@ async function buildAndPostResultEmbed(
     { name: "Bans",          value: sections.bans,     inline: false },
     { name: "Home Mods",     value: sections.homeMods, inline: false },
     { name: "Match Rundown", value: sections.rundown,  inline: false },
-    ...(sections.recipes !== "None" ? [{ name: "Recipes used", value: sections.recipes, inline: false }] : []),
+    { name: "Recipes used",  value: sections.recipes,  inline: false },
   ]
 
   await fetch(resultWebhook, {
@@ -3903,7 +3940,8 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       return c.json({ error: `${firstValue(item, ["name"]) || "Recipe"} must be crafted before the map is selected` }, 409)
     }
 
-    const events = await getRecipeEvents(c.env, matchId)
+    const allEvents = await getAllRecipeEvents(c.env)
+    const events = allEvents.filter((event) => event.matchId === matchId)
     if (events.some((event) =>
       event.status === "active" &&
       event.itemId === recipeId &&
@@ -3950,7 +3988,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
     }
 
     const displacedByCaramel = effectType === "wildcard_slot"
-      ? events.filter((event) => event.status === "active")
+      ? events.filter((event) => event.status === "active" && !event.activatedAt)
       : []
 
     const mod = typeof body.mod === "string"
@@ -4032,9 +4070,22 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       if (randomCandidates.length === 0) {
         return c.json({ error: "No valid maps are configured in caramel_maps" }, 409)
       }
-      const randomBytes = new Uint32Array(1)
-      crypto.getRandomValues(randomBytes)
-      const randomMap = randomCandidates[(randomBytes[0] ?? 0) % randomCandidates.length]
+      const priorUseCount = new Map<string, number>()
+      const priorWildcardEvents = allEvents.filter((event) =>
+        event.status !== "reverted" && effectTypeForEvent(itemRecords, event) === "wildcard_slot"
+      )
+      for (const event of priorWildcardEvents) {
+        const beatmapId = String(event.payload.wildcardBeatmapId ?? "").trim()
+        if (beatmapId) priorUseCount.set(beatmapId, (priorUseCount.get(beatmapId) ?? 0) + 1)
+      }
+      const leastUses = Math.min(...randomCandidates.map((candidate) => priorUseCount.get(candidate.beatmapId) ?? 0))
+      const leastUsedCandidates = randomCandidates.filter((candidate) =>
+        (priorUseCount.get(candidate.beatmapId) ?? 0) === leastUses
+      )
+      const lastBeatmapId = String(priorWildcardEvents.at(-1)?.payload.wildcardBeatmapId ?? "").trim()
+      const nonRepeatingCandidates = leastUsedCandidates.filter((candidate) => candidate.beatmapId !== lastBeatmapId)
+      const selectionPool = nonRepeatingCandidates.length > 0 ? nonRepeatingCandidates : leastUsedCandidates
+      const randomMap = selectionPool[secureRandomIndex(selectionPool.length)]
       activationPayload.wildcardSlot = target
       activationPayload.wildcardBeatmapId = randomMap?.beatmapId
       activationPayload.wildcardMap = randomMap?.title
@@ -4504,6 +4555,7 @@ app.get("/api/public/config", async (c) => {
 })
 
 app.post("/api/irc/send", async (c) => {
+  const sessionUser = await readSessionUser(c)
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
   if (!relayUrl || !relaySecret) {
@@ -4518,14 +4570,15 @@ app.post("/api/irc/send", async (c) => {
   }
 
   const { channel, message } = body
-  if (!channel || !/^#mp_\d+$/.test(channel) || !message) {
+  if (!channel || !/^#mp_\d+$/.test(channel) || !message?.trim()) {
     return c.json({ error: "valid lobby channel and message required" }, 400)
   }
+  const outgoingMessage = formatRefereeIrcMessage(sessionUser?.username ?? "Referee", message)
 
   // #TEST-MODE-START
   const ircCfgMap = await getConfigMap(c.env)
   if (isTestMode(ircCfgMap)) {
-    return c.json({ ok: true, simulated: true })
+    return c.json({ ok: true, simulated: true, message: outgoingMessage })
   }
   // #TEST-MODE-END
 
@@ -4535,11 +4588,11 @@ app.post("/api/irc/send", async (c) => {
       "Content-Type": "application/json",
       "X-Relay-Secret": relaySecret,
     },
-    body: JSON.stringify({ channel, message }),
+    body: JSON.stringify({ channel, message: outgoingMessage }),
   })
 
-  const data = await res.json()
-  return c.json(data, res.status as 200 | 400 | 401 | 503)
+  const data = await res.json() as Record<string, unknown>
+  return c.json({ ...data, message: outgoingMessage }, res.status as 200 | 400 | 401 | 503)
 })
 
 app.get("/api/irc/stream", async (c) => {
