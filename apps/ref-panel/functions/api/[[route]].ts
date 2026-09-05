@@ -11,6 +11,7 @@ import {
   formatMatchResultSections,
   formatLobbyMods,
   formatLobbyTitle,
+  hdUsageFromScoreReport,
   homeModIngredientAwards,
   isBanLimitReached,
   isMissCountWinCondition,
@@ -3065,8 +3066,8 @@ app.post("/api/match/:matchId/score", async (c) => {
   const playerB = typeof body.playerB === "string" ? body.playerB.trim() : ""
   const rawScoreA = typeof body.scoreA === "string" || typeof body.scoreA === "number" ? parseScoreValue(body.scoreA) : null
   const rawScoreB = typeof body.scoreB === "string" || typeof body.scoreB === "number" ? parseScoreValue(body.scoreB) : null
-  const usesHdA = body.usesHdA === true || body.hdA === true
-  const usesHdB = body.usesHdB === true || body.hdB === true
+  let usesHdA = body.usesHdA === true || body.hdA === true
+  let usesHdB = body.usesHdB === true || body.hdB === true
   const parsedMissCount = (value: unknown): number | null => {
     if (value === undefined || value === null || value === "") return null
     const parsed = Number(value)
@@ -3204,10 +3205,58 @@ app.post("/api/match/:matchId/score", async (c) => {
       ...itemPayload(itemForEvent(items, event) ?? {}),
       ...event.payload,
     })
+    const poolRecords = sheetRowsToRecords(poolValues)
     const accuracyMode = activeEvents.some((event) =>
       effect(event) === "accuracy_mode" ||
       (effect(event) === "wildcard_slot" && payloadFor(event).wildcardWinCondition === "accuracy")
     )
+    let hdDetection: "manual" | "osu_api" = "manual"
+    if (!accuracyMode) {
+      const wildcardEvent = activeEvents.find((event) => effect(event) === "wildcard_slot")
+      const poolRecord = poolRecords.find((record) =>
+        samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
+        (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
+      )
+      const expectedBeatmapId = Number(
+        (wildcardEvent ? payloadFor(wildcardEvent).wildcardBeatmapId : undefined) ??
+        firstValue(poolRecord ?? {}, ["beatmap_id"]),
+      )
+      const mpId = parseMpId(match.lobbyUrl ?? "")
+      const playerAOsuId = Number(match.playerAOsuId)
+      const playerBOsuId = Number(match.playerBOsuId)
+      if (
+        mpId && Number.isSafeInteger(expectedBeatmapId) && expectedBeatmapId > 0 &&
+        Number.isSafeInteger(playerAOsuId) && playerAOsuId > 0 &&
+        Number.isSafeInteger(playerBOsuId) && playerBOsuId > 0
+      ) {
+        let reportTimeout: ReturnType<typeof setTimeout> | undefined
+        try {
+          const report = await Promise.race([
+            fetchOsuMpMatch(c.env, mpId),
+            new Promise<never>((_, reject) => {
+              reportTimeout = setTimeout(() => reject(new Error("osu! score report lookup timed out")), 5_000)
+            }),
+          ])
+          const detected = hdUsageFromScoreReport(
+            report.games,
+            expectedBeatmapId,
+            playerAOsuId,
+            playerBOsuId,
+            rawScoreA,
+            rawScoreB,
+          )
+          if (detected) {
+            usesHdA = detected.usesHdA
+            usesHdB = detected.usesHdB
+            hdDetection = "osu_api"
+          }
+        } catch {
+          // Keep the referee-provided HD toggles when osu! match history is temporarily unavailable.
+        } finally {
+          if (reportTimeout) clearTimeout(reportTimeout)
+        }
+      }
+    }
     const missCountMode = isMissCountWinCondition(slot)
     if (accuracyMode && (rawScoreA > 100 || rawScoreB > 100)) {
       return c.json({ error: "Accuracy values must be between 0% and 100%" }, 400)
@@ -3343,7 +3392,6 @@ app.post("/api/match/:matchId/score", async (c) => {
       scoreB: startingScoreB + (!wasCompleted && samePlayer(winner, playerB) ? 1 : 0),
     }
 
-    const poolRecords = sheetRowsToRecords(poolValues)
     const pool = getMapPoolForSlot(poolRecords, slot)
     const ingredient = POOL_TO_INGREDIENT[pool]
     const inventoryRecords = sheetRowsToRecords(inventoryValues)
@@ -3541,7 +3589,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       "match_map",
       `${matchId}:${slot}`,
       beforeJson,
-      JSON.stringify({ slot, rawScoreA, rawScoreB, usesHdA, usesHdB, missCountA: finalMissCountA, missCountB: finalMissCountB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
+      JSON.stringify({ slot, rawScoreA, rawScoreB, usesHdA, usesHdB, hdDetection, missCountA: finalMissCountA, missCountB: finalMissCountB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
     ).catch(() => {})
 
     return c.json({
@@ -3555,6 +3603,7 @@ app.post("/api/match/:matchId/score", async (c) => {
         scoreB: accuracyMode ? rawScoreB : normalizeHdScore(rawScoreB, usesHdB),
       },
       hd: { playerA: usesHdA, playerB: usesHdB },
+      hdDetection,
       winCondition: missCountMode ? "miss_count" : accuracyMode ? "accuracy" : "score",
       missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
       winner,

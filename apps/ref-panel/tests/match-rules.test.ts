@@ -11,6 +11,7 @@ import {
   formatScheduleDateTime,
   formatScheduleTimeInput,
   formatLobbyTitle,
+  hdUsageFromScoreReport,
   homeModIngredientAwards,
   isBanLimitReached,
   isValidScheduleDate,
@@ -113,6 +114,25 @@ describe("match progression", () => {
     expect(compareMapResults("PS3", 900_000, 800_000, 2, 1)).toBe(-1)
     expect(compareMapResults("PS3", 900_000, 800_000, 1, 1)).toBe(0)
     expect(compareMapResults("PS3", 900_000, 800_000)).toBeNull()
+  })
+
+  test("detects HD from the matching finished osu score report", () => {
+    const games = [
+      {
+        beatmapId: 5854733,
+        endedAt: "2026-08-30T10:00:00Z",
+        scores: [
+          { userId: 8250297, score: 399617, mods: ["NF", "HR"] },
+          { userId: 1501956, score: 417450, mods: ["NF", "HD", "HR"] },
+        ],
+      },
+    ]
+    expect(hdUsageFromScoreReport(games, 5854733, 8250297, 1501956, 399617, 417450)).toEqual({
+      usesHdA: false,
+      usesHdB: true,
+    })
+    expect(normalizeHdScore(417450, true)).toBe(393821)
+    expect(hdUsageFromScoreReport(games, 5854733, 8250297, 1501956, 1, 2)).toBeNull()
   })
 
   test("awards one home ingredient on a loss and two on a win", () => {

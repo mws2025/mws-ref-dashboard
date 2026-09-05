@@ -301,6 +301,44 @@ export function normalizeHdScore(score: number, usesHd: boolean): number {
   return usesHd ? Math.round(score / HD_SCORE_MULTIPLIER) : score
 }
 
+export type OsuScoreReportGame = {
+  beatmapId: number
+  endedAt?: string | null
+  scores: Array<{
+    userId: number
+    score: number
+    mods: readonly string[]
+  }>
+}
+
+export function hdUsageFromScoreReport(
+  games: readonly OsuScoreReportGame[],
+  beatmapId: number,
+  playerAOsuId: number,
+  playerBOsuId: number,
+  scoreA: number,
+  scoreB: number,
+): { usesHdA: boolean; usesHdB: boolean } | null {
+  let game: OsuScoreReportGame | undefined
+  for (let index = games.length - 1; index >= 0; index -= 1) {
+    const candidate = games[index]
+    if (!candidate) continue
+    if (!candidate.endedAt || candidate.beatmapId !== beatmapId) continue
+    const playerA = candidate.scores.find((score) => score.userId === playerAOsuId)
+    const playerB = candidate.scores.find((score) => score.userId === playerBOsuId)
+    if (playerA?.score === scoreA && playerB?.score === scoreB) {
+      game = candidate
+      break
+    }
+  }
+  if (!game) return null
+
+  const hasHd = (userId: number): boolean => game.scores
+    .find((score) => score.userId === userId)
+    ?.mods.some((mod) => mod.toUpperCase() === "HD") ?? false
+  return { usesHdA: hasHd(playerAOsuId), usesHdB: hasHd(playerBOsuId) }
+}
+
 export function isMissCountWinCondition(slot: string): boolean {
   return slot.trim().toUpperCase() === "PS3"
 }

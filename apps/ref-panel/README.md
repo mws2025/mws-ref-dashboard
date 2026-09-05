@@ -441,6 +441,11 @@ Magic Cake copies the opponent's latest `resolved` recipe, not
 an active or reverted event. The two Cinnamon Roll entries are labeled `(Protect)` and `(Unban)` in the UI and recipes
 are listed alphabetically.
 
+For normal score win conditions, score submission cross-checks the matching finished osu! game by lobby, beatmap,
+player IDs, and raw scores. HD usage from osu! match history is authoritative and each HD score is divided by `1.06`
+before winner comparison. The referee HD toggles remain the fallback when match history is unavailable or has not yet
+published the matching game.
+
 Other mutation bodies:
 
 | Route | JSON body |
