@@ -362,6 +362,11 @@ export function formatLobbyTitle(abbreviation: string, playerA: string, playerB:
   return `${abbreviation.trim() || "MWS"}: (${playerA.trim()}) vs (${playerB.trim()})`
 }
 
+export function parseCreatedLobbyAnnouncement(message: string, expectedTitle: string): string | null {
+  const match = message.match(/^Created the tournament match https:\/\/osu\.ppy\.sh\/mp\/(\d+)\s+(.+)$/)
+  return match?.[2]?.trim() === expectedTitle.trim() ? match[1] ?? null : null
+}
+
 export function lobbyInviteTarget(username: string, osuId?: string): string {
   const normalizedId = osuId?.trim()
   if (normalizedId && /^\d+$/.test(normalizedId)) return `#${normalizedId}`

@@ -1010,6 +1010,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
 
             <TabsContent value="irc" forceMount className="flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden">
               <IrcChat
+                key={lobbyUrlToChannel(liveLobbyUrl) ?? "no-lobby"}
                 ref={ircRef}
                 channel={lobbyUrlToChannel(liveLobbyUrl)}
                 refName={match.referee ?? "Referee"}

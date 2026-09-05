@@ -207,6 +207,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
 - [x] Caramel draws from the dedicated `caramel_maps` sheet, validates map/mod/win-condition data, and keeps ScoreV2 while supporting accuracy winner comparison.
 - [x] Normal score reports verify per-player HD against osu! match history and remove the 1.06 multiplier before winner comparison.
+- [x] Parallel referee sessions have strict IRC channel isolation and atomic, title-correlated lobby creation.
 - [x] Test mode can run the same flow without sending live IRC commands; Sheet-backed state remains authoritative.
 
 ### Test Mode

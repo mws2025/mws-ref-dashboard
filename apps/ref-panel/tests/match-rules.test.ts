@@ -24,6 +24,7 @@ import {
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
+  parseCreatedLobbyAnnouncement,
   normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
@@ -195,6 +196,14 @@ describe("referee input and lobby formatting", () => {
     expect(formatLobbyTitle("MWSW", "Player A", "Player B")).toBe("MWSW: (Player A) vs (Player B)")
     expect(lobbyInviteTarget("WEARY", "12345")).toBe("#12345")
     expect(lobbyInviteTarget("Cinnamon Twist")).toBe("Cinnamon_Twist")
+  })
+
+  test("correlates lobby creation announcements by exact title", () => {
+    const titleA = "MWSW: (shouponpon) vs (shadevr)"
+    const titleB = "MWSW: (John ethken) vs (Flyer)"
+    const announcement = `Created the tournament match https://osu.ppy.sh/mp/121808612 ${titleA}`
+    expect(parseCreatedLobbyAnnouncement(announcement, titleA)).toBe("121808612")
+    expect(parseCreatedLobbyAnnouncement(announcement, titleB)).toBeNull()
   })
 })
 

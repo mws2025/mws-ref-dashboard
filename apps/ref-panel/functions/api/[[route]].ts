@@ -23,6 +23,7 @@ import {
   normalizeHdScore,
   parseScoreValue,
   normalizeScheduleTime,
+  parseCreatedLobbyAnnouncement,
   refereeAssignments,
   refereeIsAssigned,
   scheduleDateSerial,
@@ -4447,8 +4448,8 @@ app.post("/api/irc/send", async (c) => {
   }
 
   const { channel, message } = body
-  if (!channel || !message) {
-    return c.json({ error: "channel and message required" }, 400)
+  if (!channel || !/^#mp_\d+$/.test(channel) || !message) {
+    return c.json({ error: "valid lobby channel and message required" }, 400)
   }
 
   // #TEST-MODE-START
@@ -4478,9 +4479,12 @@ app.get("/api/irc/stream", async (c) => {
     return c.json({ error: "IRC relay not configured" }, 503)
   }
 
-  const channel = c.req.query("channel")
+  const channel = c.req.query("channel")?.trim() ?? ""
+  if (!/^#mp_\d+$/.test(channel)) {
+    return c.json({ error: "A valid lobby channel is required" }, 400)
+  }
   const streamUrl = new URL(`${relayUrl}/stream`)
-  if (channel) streamUrl.searchParams.set("channel", channel)
+  streamUrl.searchParams.set("channel", channel)
 
   const relayRes = await fetch(streamUrl.toString(), {
     headers: {
@@ -4570,79 +4574,27 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
   }
   // #TEST-MODE-END
 
-  // Open SSE stream BEFORE sending !mp make to avoid race with BanchoBot response
-  const streamRes = await fetch(`${relayUrl}/stream`, {
-    headers: { "X-Relay-Secret": relaySecret, Accept: "text/event-stream" },
-  })
-  if (!streamRes.ok || !streamRes.body) {
-    return c.json({ error: `Relay stream unavailable (${streamRes.status})` }, 503)
-  }
-
-  const reader = streamRes.body.getReader()
-
-  // Send !mp make to BanchoBot (PM)
-  const sendRes = await fetch(`${relayUrl}/send`, {
+  const makeRes = await fetch(`${relayUrl}/make`, {
     method: "POST",
     redirect: "manual",
     headers: { "Content-Type": "application/json", "X-Relay-Secret": relaySecret },
-    body: JSON.stringify({ channel: "BanchoBot", message: `!mp make ${title}` }),
+    body: JSON.stringify({ title }),
   })
-  if (!sendRes.ok) {
-    const reason = (await sendRes.text()).slice(0, 300)
-    await reader.cancel().catch(() => {})
+  if (!makeRes.ok) {
+    const reason = (await makeRes.text()).slice(0, 300)
     return c.json({
-      error: `Relay send failed (${sendRes.status})${reason ? `: ${reason}` : ""}`,
-    }, 502)
+      error: `Relay lobby creation failed (${makeRes.status})${reason ? `: ${reason}` : ""}`,
+    }, makeRes.status === 504 ? 408 : 502)
   }
-
-  // Read SSE until BanchoBot confirms lobby created
-  const decoder = new TextDecoder()
-  let lobbyUrl: string | null = null
-  const deadline = Date.now() + 12000
-  let buf = ""
-
-  while (Date.now() < deadline && !lobbyUrl) {
-    const remainingMs = deadline - Date.now()
-    const chunk = await new Promise<{ done: boolean; value?: Uint8Array } | null>((resolve, reject) => {
-      const timeout = setTimeout(() => resolve(null), remainingMs)
-      reader.read().then(
-        (result) => {
-          clearTimeout(timeout)
-          resolve(result)
-        },
-        (error) => {
-          clearTimeout(timeout)
-          reject(error)
-        },
-      )
-    })
-    if (!chunk) break
-    const { done, value } = chunk
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    const lines = buf.split("\n")
-    buf = lines.pop() ?? ""
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue
-      try {
-        const ev = JSON.parse(line.slice(6)) as { from?: string; message?: string }
-        if (ev.from === "BanchoBot" && ev.message?.includes("osu.ppy.sh/mp/")) {
-          const m = ev.message.match(/https:\/\/osu\.ppy\.sh\/mp\/(\d+)/)
-          if (m) lobbyUrl = `https://osu.ppy.sh/mp/${m[1]}`
-        }
-      } catch {
-        // Ignore malformed relay events while waiting for BanchoBot.
-      }
-      if (lobbyUrl) break
-    }
-  }
-  await reader.cancel().catch(() => {})
-
-  if (!lobbyUrl) {
-    return c.json({ error: "Timed out waiting for BanchoBot" }, 408)
-  }
-
-  const mpId = lobbyUrl.match(/\/mp\/(\d+)/)?.[1] ?? ""
+  const makePayload = toRecord(await makeRes.json())
+  const returnedTitle = typeof makePayload?.title === "string" ? makePayload.title : ""
+  const returnedLobbyUrl = typeof makePayload?.lobbyUrl === "string" ? makePayload.lobbyUrl : ""
+  const announcement = returnedLobbyUrl && returnedTitle
+    ? `Created the tournament match ${returnedLobbyUrl} ${returnedTitle}`
+    : ""
+  const mpId = parseCreatedLobbyAnnouncement(announcement, title)
+  if (!mpId) return c.json({ error: "Relay returned a lobby for a different match" }, 502)
+  const lobbyUrl = `https://osu.ppy.sh/mp/${mpId}`
   const channel = `#mp_${mpId}`
 
   // Build !mp set and optional follow-up commands

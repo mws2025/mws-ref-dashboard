@@ -6,6 +6,7 @@ import { lobbyInviteTarget } from "@/lib/match-rules"
 export interface LiveMsg {
   ts: string
   from: string
+  channel?: string
   message: string
   local?: boolean
 }
@@ -57,6 +58,7 @@ export const IrcChat = forwardRef<IrcChatHandle, Props>(function IrcChat(
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data as string) as LiveMsg
+        if (msg.channel !== channel) return
         setMessages((prev) => [...prev, msg])
         onNewMessage?.(msg)
       } catch {
