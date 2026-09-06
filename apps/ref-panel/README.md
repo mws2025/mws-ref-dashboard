@@ -2,6 +2,9 @@
 
 Developer notes for the referee portal codebase. The app is a Vite + React frontend backed by Cloudflare Pages Functions. Google Sheets is the data source; the browser never talks to Sheets directly.
 
+For a new tournament implementation based on this system, start with the
+[reusable referee portal handoff](../../docs/handoffs/2026-09-06-reusable-referee-portal-handoff.md).
+
 ## Stack
 
 - Frontend: Vite, React, TypeScript
