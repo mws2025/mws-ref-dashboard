@@ -19,9 +19,11 @@ import {
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
+  mapResultFromScoreReport,
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
   normalizeHdScore,
+  parseMappoolOptionalMods,
   parseScoreValue,
   normalizeScheduleTime,
   parseCreatedLobbyAnnouncement,
@@ -101,6 +103,8 @@ type ApiPoolMap = {
   pool: string
   map: string
   beatmapId?: string
+  winCondition: "score" | "accuracy"
+  allowedMods: string[]
   status: string
   pickedBy?: string
   bannedBy?: string
@@ -127,6 +131,7 @@ type TestExpectedSetup = {
   lobbyMods: string
   playerAMods: string[]
   playerBMods: string[]
+  allowedMods: string[]
   scoringType: string
   winCondition: "score" | "accuracy"
 }
@@ -1432,6 +1437,7 @@ function parseTestMpBinding(raw: string): TestMpBinding | undefined {
           lobbyMods: String(expectedRaw.lobbyMods ?? ""),
           playerAMods: normalizeOsuMods(expectedRaw.playerAMods),
           playerBMods: normalizeOsuMods(expectedRaw.playerBMods),
+          allowedMods: normalizeOsuMods(expectedRaw.allowedMods),
           scoringType: String(expectedRaw.scoringType ?? "score"),
           winCondition: expectedRaw.winCondition === "accuracy" ? "accuracy" as const : "score" as const,
         }
@@ -1947,6 +1953,8 @@ async function activateRecipesForPick(
   pool: string,
   playerA: string,
   playerB: string,
+  mapWinConditionValue = "",
+  mapOptionalModsValue = "",
 ): Promise<RecipePickSetup> {
   const [events, items, configMap] = await Promise.all([
     getRecipeEvents(env, matchId),
@@ -1973,13 +1981,20 @@ async function activateRecipesForPick(
   }
 
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
-  let mods = lobbyModsForPool(pool, enforceNF)
-  const allowedMods = new Set<string>(["HD"])
+  const mapWinCondition = caramelWinCondition(mapWinConditionValue)
+  if (mapWinCondition === null) throw new Error(`${slot} has invalid win_con: ${mapWinConditionValue}`)
+  const mapOptionalMods = parseMappoolOptionalMods(mapOptionalModsValue)
+  if (mapOptionalMods === null) throw new Error(`${slot} has invalid optional mods: ${mapOptionalModsValue}`)
+  const usesMapFreemod = mapOptionalMods.length > 0
+  let mods = usesMapFreemod
+    ? formatLobbyMods(["Freemod"], enforceNF)
+    : lobbyModsForPool(pool, enforceNF)
+  const allowedMods = new Set<string>(usesMapFreemod ? mapOptionalMods : ["HD"])
   const commandsBefore: string[] = []
   const notices: string[] = []
   let beatmapId: string | undefined
   let mapTitle: string | undefined
-  let winCondition: "score" | "accuracy" = "score"
+  let winCondition: "score" | "accuracy" = mapWinCondition
   const extraPlayerMods = new Map<string, Set<string>>([
     [playerA.toLowerCase(), new Set<string>()],
     [playerB.toLowerCase(), new Set<string>()],
@@ -1991,7 +2006,10 @@ async function activateRecipesForPick(
     const effectType = effectTypeForEvent(items, event)
     const item = itemForEvent(items, event)
     const payload = { ...itemPayload(item ?? {}), ...event.payload }
-    if (effectType === "mod_replace" && pool.toUpperCase() === "DT") {
+    if (
+      effectType === "mod_replace" &&
+      mods.split(/\s+/).some((mod) => mod.toUpperCase() === "DT")
+    ) {
       mods = formatLobbyMods(["NC"], enforceNF)
     } else if (effectType === "mod_add_self") {
       const selectedMod = String(payload.mod ?? "").toUpperCase()
@@ -2061,7 +2079,9 @@ async function activateRecipesForPick(
   return {
     eventIds: active.map((event) => event.id),
     mods,
-    allowedMods: mods.split(/\s+/).some((mod) => mod.toLowerCase() === "freemod") ? [] : [...allowedMods],
+    allowedMods: mods.split(/\s+/).some((mod) => mod.toLowerCase() === "freemod") && !usesMapFreemod
+      ? []
+      : [...allowedMods],
     commandsBefore,
     notices,
     playerAMods: requiredMods(playerA),
@@ -2481,11 +2501,17 @@ app.get("/api/match/:matchId/mappool", async (c) => {
       const slot = r["map_id"]?.trim() ?? ""
       const ov   = overrides.get(slot.toLowerCase())
       const beatmapId = r["beatmap_id"]?.trim() || undefined
+      const winCondition = caramelWinCondition(firstValue(r, ["win_con"]))
+      const allowedMods = parseMappoolOptionalMods(firstValue(r, ["mods"]))
+      if (winCondition === null) throw new Error(`${slot} has invalid win_con: ${firstValue(r, ["win_con"])}`)
+      if (allowedMods === null) throw new Error(`${slot} has invalid optional mods: ${firstValue(r, ["mods"])}`)
       return {
         slot,
         pool:      r["mod_pool"]?.trim().toUpperCase() ?? "",
         map:       r["title"]?.trim() ?? "",
         beatmapId,
+        winCondition,
+        allowedMods,
         status:    ov?.["status"]?.trim() || "available",
         pickedBy:  ov?.["picked_by"]?.trim() || undefined,
         bannedBy:  ov?.["banned_by"]?.trim() || undefined,
@@ -2515,6 +2541,8 @@ app.get("/api/match/:matchId/mappool", async (c) => {
         pool: "WC",
         map: `${String(latestCaramel.payload.wildcardMap ?? "Caramel wildcard")}${source ? ` (${source})` : ""}`,
         beatmapId: String(latestCaramel.payload.wildcardBeatmapId),
+        winCondition: latestCaramel.payload.wildcardWinCondition === "accuracy" ? "accuracy" : "score",
+        allowedMods: [],
         status: wildcardOverride?.status?.trim() || (latestCaramel.status === "resolved" ? "completed" : "picked"),
         pickedBy: wildcardOverride?.picked_by?.trim() || latestCaramel.player,
         winner: wildcardOverride?.winner?.trim() || undefined,
@@ -2770,6 +2798,9 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
     const lobbyModsMatch = isFreemod || expectedLobbyMods.every((mod) => actualLobbyMods.has(mod))
     const playerAModsMatch = binding.expected.playerAMods.every((mod) => actualPlayerAMods.has(mod))
     const playerBModsMatch = binding.expected.playerBMods.every((mod) => actualPlayerBMods.has(mod))
+    const allowedMods = new Set(binding.expected.allowedMods ?? [])
+    const usesOnlyAllowedMods = (actualMods: Set<string>): boolean => allowedMods.size === 0 ||
+      [...actualMods].filter((mod) => mod !== "NF").every((mod) => allowedMods.has(mod))
     const checks = [
       { key: "flow", label: "Portal map is awaiting score", ok: state.phase === "play" && samePlayer(state.currentSlot, binding.expected.slot), expected: `play ${binding.expected.slot}`, actual: `${state.phase} ${state.currentSlot ?? "none"}` },
       { key: "finished", label: "Game finished", ok: Boolean(game.endedAt), expected: "finished", actual: game.endedAt ?? "in progress" },
@@ -2779,6 +2810,8 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
       { key: "lobby_mods", label: "Lobby mods", ok: lobbyModsMatch, expected: expectedLobbyModTokens.join(" ") || "None", actual: isFreemod ? "verified per player" : [...actualLobbyMods].join(" ") || "None" },
       { key: "player_a_mods", label: `${match.playerA} mods`, ok: playerAModsMatch, expected: binding.expected.playerAMods.join(" ") || "None", actual: [...actualPlayerAMods].join(" ") || "None" },
       { key: "player_b_mods", label: `${match.playerB} mods`, ok: playerBModsMatch, expected: binding.expected.playerBMods.join(" ") || "None", actual: [...actualPlayerBMods].join(" ") || "None" },
+      { key: "player_a_allowed_mods", label: `${match.playerA} optional mods`, ok: usesOnlyAllowedMods(actualPlayerAMods), expected: binding.expected.allowedMods.join(" ") || "Unrestricted", actual: [...actualPlayerAMods].filter((mod) => mod !== "NF").join(" ") || "None" },
+      { key: "player_b_allowed_mods", label: `${match.playerB} optional mods`, ok: usesOnlyAllowedMods(actualPlayerBMods), expected: binding.expected.allowedMods.join(" ") || "Unrestricted", actual: [...actualPlayerBMods].filter((mod) => mod !== "NF").join(" ") || "None" },
       { key: "scoring", label: "Scoring type", ok: game.scoringType === binding.expected.scoringType, expected: binding.expected.scoringType, actual: game.scoringType || "unknown" },
     ]
     const accuracyMode = binding.expected.winCondition === "accuracy"
@@ -3110,6 +3143,49 @@ app.post("/api/match/:matchId/reset", async (c) => {
   }
 })
 
+app.post("/api/match/:matchId/detect-result", async (c) => {
+  let body: Record<string, unknown>
+  try {
+    body = await c.req.json() as Record<string, unknown>
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400)
+  }
+
+  const beatmapId = Number(body.beatmapId)
+  const scoreA = Number(body.scoreA)
+  const scoreB = Number(body.scoreB)
+  const mpId = parseMpId(body.lobbyUrl)
+  const playerAOsuId = Number(body.playerAOsuId)
+  const playerBOsuId = Number(body.playerBOsuId)
+  if (
+    !mpId ||
+    !Number.isSafeInteger(beatmapId) || beatmapId <= 0 ||
+    !Number.isSafeInteger(scoreA) || scoreA < 0 ||
+    !Number.isSafeInteger(scoreB) || scoreB < 0 ||
+    !Number.isSafeInteger(playerAOsuId) || playerAOsuId <= 0 ||
+    !Number.isSafeInteger(playerBOsuId) || playerBOsuId <= 0
+  ) {
+    return c.json({ error: "Valid lobby, beatmap, player IDs, and scores are required" }, 400)
+  }
+
+  try {
+    const report = await fetchOsuMpMatch(c.env, mpId)
+    const result = mapResultFromScoreReport(
+      report.games,
+      beatmapId,
+      playerAOsuId,
+      playerBOsuId,
+      scoreA,
+      scoreB,
+    )
+    return result
+      ? c.json({ pending: false, result })
+      : c.json({ pending: true, message: "The matching completed osu! game is not available yet" })
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "Failed to detect osu! result" }, 502)
+  }
+})
+
 app.post("/api/match/:matchId/score", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
@@ -3276,16 +3352,20 @@ app.post("/api/match/:matchId/score", async (c) => {
       return c.json({ error: "Choose exactly two ingredients for the Caramel map winner" }, 400)
     }
     const poolRecords = sheetRowsToRecords(poolValues)
-    const accuracyMode = activeEvents.some((event) =>
+    const poolRecord = poolRecords.find((record) =>
+      samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
+      (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
+    )
+    const mapWinCondition = caramelWinCondition(firstValue(poolRecord ?? {}, ["win_con"]))
+    if (mapWinCondition === null) {
+      return c.json({ error: `${slot} has invalid win_con: ${firstValue(poolRecord ?? {}, ["win_con"])}` }, 409)
+    }
+    const accuracyMode = mapWinCondition === "accuracy" || activeEvents.some((event) =>
       effect(event) === "accuracy_mode" ||
       (effect(event) === "wildcard_slot" && payloadFor(event).wildcardWinCondition === "accuracy")
     )
     let hdDetection: "manual" | "osu_api" = "manual"
     if (!accuracyMode) {
-      const poolRecord = poolRecords.find((record) =>
-        samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
-        (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
-      )
       const expectedBeatmapId = Number(
         (wildcardEvent ? payloadFor(wildcardEvent).wildcardBeatmapId : undefined) ??
         firstValue(poolRecord ?? {}, ["beatmap_id"]),
@@ -4241,6 +4321,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
               lobbyMods: recipeSetup.mods,
               playerAMods: recipeSetup.playerAMods,
               playerBMods: recipeSetup.playerBMods,
+              allowedMods: recipeSetup.allowedMods,
               scoringType: expectedScoringType,
               winCondition: recipeSetup.winCondition,
             },
@@ -5351,7 +5432,17 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
       (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
     )
     const pool = firstValue(poolRecord ?? {}, ["mod_pool", "pool"]).toUpperCase() || getMapPoolForSlot(poolRecords, slot)
-    const recipeSetup = await activateRecipesForPick(c.env, matchId, picker, slot, pool, match.playerA, match.playerB)
+    const recipeSetup = await activateRecipesForPick(
+      c.env,
+      matchId,
+      picker,
+      slot,
+      pool,
+      match.playerA,
+      match.playerB,
+      firstValue(poolRecord ?? {}, ["win_con"]),
+      firstValue(poolRecord ?? {}, ["mods"]),
+    )
     const expectedBeatmapId = Number(recipeSetup.beatmapId ?? firstValue(poolRecord ?? {}, ["beatmap_id"]))
     const scoringCommand = recipeSetup.commandsBefore
       .map((command) => command.match(/^!mp set\s+\d+\s+(\d+)/i)?.[1])
@@ -5368,6 +5459,7 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
             lobbyMods: recipeSetup.mods,
             playerAMods: recipeSetup.playerAMods,
             playerBMods: recipeSetup.playerBMods,
+            allowedMods: recipeSetup.allowedMods,
             scoringType: expectedScoringType,
             winCondition: recipeSetup.winCondition,
           },

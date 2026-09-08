@@ -285,6 +285,19 @@ export function lobbyModsForPool(pool: string, enforceNF: boolean): string {
 
 export type CaramelWinCondition = "score" | "accuracy"
 
+const OPTIONAL_MAP_MODS = new Set(["HD", "HR", "DT", "NC", "HT", "EZ", "FL", "SO", "AP"])
+
+export function parseMappoolOptionalMods(value: string): string[] | null {
+  const trimmed = value.trim()
+  if (!trimmed) return []
+  const mods = trimmed
+    .split(/[,/|+\s]+/)
+    .map((mod) => mod.trim().toUpperCase())
+    .filter(Boolean)
+  if (mods.length === 0 || mods.some((mod) => !OPTIONAL_MAP_MODS.has(mod))) return null
+  return [...new Set(mods)]
+}
+
 export function caramelLobbyMods(value: string, enforceNF: boolean): string | null {
   const normalized = value.trim().toLowerCase().replace(/[\s+]+/g, "-")
   const modsBySheetValue: Record<string, string[]> = {
@@ -348,8 +361,46 @@ export type OsuScoreReportGame = {
   scores: Array<{
     userId: number
     score: number
+    accuracy?: number
     mods: readonly string[]
   }>
+}
+
+export type DetectedOsuMapResult = {
+  scoreA: number
+  scoreB: number
+  accuracyA: number
+  accuracyB: number
+  usesHdA: boolean
+  usesHdB: boolean
+}
+
+export function mapResultFromScoreReport(
+  games: readonly OsuScoreReportGame[],
+  beatmapId: number,
+  playerAOsuId: number,
+  playerBOsuId: number,
+  scoreA: number,
+  scoreB: number,
+): DetectedOsuMapResult | null {
+  for (let index = games.length - 1; index >= 0; index -= 1) {
+    const candidate = games[index]
+    if (!candidate?.endedAt || candidate.beatmapId !== beatmapId) continue
+    const playerA = candidate.scores.find((score) => score.userId === playerAOsuId)
+    const playerB = candidate.scores.find((score) => score.userId === playerBOsuId)
+    if (playerA?.score !== scoreA || playerB?.score !== scoreB) continue
+    if (!Number.isFinite(playerA.accuracy) || !Number.isFinite(playerB.accuracy)) return null
+    const percentage = (accuracy: number): number => Number((accuracy <= 1 ? accuracy * 100 : accuracy).toFixed(4))
+    return {
+      scoreA: playerA.score,
+      scoreB: playerB.score,
+      accuracyA: percentage(playerA.accuracy ?? 0),
+      accuracyB: percentage(playerB.accuracy ?? 0),
+      usesHdA: playerA.mods.some((mod) => mod.toUpperCase() === "HD"),
+      usesHdB: playerB.mods.some((mod) => mod.toUpperCase() === "HD"),
+    }
+  }
+  return null
 }
 
 export function hdUsageFromScoreReport(
@@ -360,24 +411,18 @@ export function hdUsageFromScoreReport(
   scoreA: number,
   scoreB: number,
 ): { usesHdA: boolean; usesHdB: boolean } | null {
-  let game: OsuScoreReportGame | undefined
   for (let index = games.length - 1; index >= 0; index -= 1) {
     const candidate = games[index]
-    if (!candidate) continue
-    if (!candidate.endedAt || candidate.beatmapId !== beatmapId) continue
+    if (!candidate?.endedAt || candidate.beatmapId !== beatmapId) continue
     const playerA = candidate.scores.find((score) => score.userId === playerAOsuId)
     const playerB = candidate.scores.find((score) => score.userId === playerBOsuId)
-    if (playerA?.score === scoreA && playerB?.score === scoreB) {
-      game = candidate
-      break
+    if (playerA?.score !== scoreA || playerB?.score !== scoreB) continue
+    return {
+      usesHdA: playerA.mods.some((mod) => mod.toUpperCase() === "HD"),
+      usesHdB: playerB.mods.some((mod) => mod.toUpperCase() === "HD"),
     }
   }
-  if (!game) return null
-
-  const hasHd = (userId: number): boolean => game.scores
-    .find((score) => score.userId === userId)
-    ?.mods.some((mod) => mod.toUpperCase() === "HD") ?? false
-  return { usesHdA: hasHd(playerAOsuId), usesHdB: hasHd(playerBOsuId) }
+  return null
 }
 
 export function isMissCountWinCondition(slot: string): boolean {

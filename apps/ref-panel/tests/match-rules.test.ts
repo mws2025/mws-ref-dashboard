@@ -19,10 +19,12 @@ import {
   isTiebreakerReady,
   isMissCountWinCondition,
   latestRoundScheduleMatches,
+  mapResultFromScoreReport,
   lobbyInviteTarget,
   lobbyModsForPool,
   nextPlayerAfterPick,
   normalizeHdScore,
+  parseMappoolOptionalMods,
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
@@ -80,6 +82,14 @@ describe("lobby mods", () => {
     expect(caramelWinCondition("acc")).toBe("accuracy")
     expect(caramelWinCondition("accuracy")).toBe("accuracy")
     expect(caramelWinCondition("combo")).toBeNull()
+  })
+
+  test("parses optional mappool mods and rejects unsupported values", () => {
+    expect(parseMappoolOptionalMods("")).toEqual([])
+    expect(parseMappoolOptionalMods("HD")).toEqual(["HD"])
+    expect(parseMappoolOptionalMods("HD, HR/DT")).toEqual(["HD", "HR", "DT"])
+    expect(parseMappoolOptionalMods("HD,HD")).toEqual(["HD"])
+    expect(parseMappoolOptionalMods("RX")).toBeNull()
   })
 })
 
@@ -150,8 +160,8 @@ describe("match progression", () => {
         beatmapId: 5854733,
         endedAt: "2026-08-30T10:00:00Z",
         scores: [
-          { userId: 8250297, score: 399617, mods: ["NF", "HR"] },
-          { userId: 1501956, score: 417450, mods: ["NF", "HD", "HR"] },
+          { userId: 8250297, score: 399617, accuracy: 0.98765, mods: ["NF", "HR"] },
+          { userId: 1501956, score: 417450, accuracy: 98.12345, mods: ["NF", "HD", "HR"] },
         ],
       },
     ]
@@ -160,6 +170,14 @@ describe("match progression", () => {
       usesHdB: true,
     })
     expect(normalizeHdScore(417450, true)).toBe(393821)
+    expect(mapResultFromScoreReport(games, 5854733, 8250297, 1501956, 399617, 417450)).toEqual({
+      scoreA: 399617,
+      scoreB: 417450,
+      accuracyA: 98.765,
+      accuracyB: 98.1235,
+      usesHdA: false,
+      usesHdB: true,
+    })
     expect(hdUsageFromScoreReport(games, 5854733, 8250297, 1501956, 1, 2)).toBeNull()
   })
 

@@ -171,7 +171,7 @@ Match control reads and writes these additional tabs when available:
 
 ```text
 mappool:
-round, map_id, mod_pool, beatmap_id, title
+round, map_id, mod_pool, beatmap_id, title, win_con, mods
 
 caramel_maps:
 pick_id, title, stage, mod, win_con, mappool_year, map_id
@@ -263,7 +263,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `GET` | `/api/matches` | Returns all, assigned, and active Sheets-backed matches. |
 | `PUT` | `/api/match/:matchId/referee` | Uses `{ "action": "signup" }` or `{ "action": "signout" }` to update the authenticated referee's assignment. |
 | `PUT` | `/api/match/:matchId/schedule` | Admin-only update using `{ "date": "YYYY-MM-DD", "time": "HH:MM" }`. |
-| `GET` | `/api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Returns pool maps, match overrides, and wins. |
+| `GET` | `/api/match/:matchId/mappool?mappool=&playerA=&playerB=` | Returns pool maps, win conditions, optional mods, match overrides, and wins. |
 | `GET` | `/api/match/:matchId/inventory?playerA=&playerB=` | Returns both players' ingredient inventories. |
 | `PUT` | `/api/match/:matchId/inventory` | Writes one player's absolute inventory values and an audit entry. |
 | `GET` | `/api/match/:matchId/state` | Returns persisted flow state or its lobby-aware default. |
@@ -271,10 +271,27 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `POST` | `/api/match/:matchId/match-score` | Stores an absolute manual match-star correction in `matches`. |
 | `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or corrective `unpick`. |
 | `POST` | `/api/match/:matchId/setup-map` | Binds both players' active recipes to the picked map and returns lobby setup commands. |
+| `POST` | `/api/match/:matchId/detect-result` | Resolves an exact Bancho score pair to per-player score, accuracy, and HD use from osu! match history. |
 | `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
 | `POST` | `/api/match/:matchId/reset` | Resets the full match state while preserving the connected lobby. |
 | `POST` | `/api/match/:matchId/post-result` | Completes the match and posts the result webhook. |
 | `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1`. |
+
+Live accuracy detection uses the identifiers already loaded for the open match and does not read Sheets again:
+
+```json
+{
+  "lobbyUrl": "https://osu.ppy.sh/mp/123456",
+  "beatmapId": 987654,
+  "playerAOsuId": 111,
+  "playerBOsuId": 222,
+  "scoreA": 812345,
+  "scoreB": 798765
+}
+```
+
+`detect-result` returns `{ "pending": true }` until that exact completed game appears, then returns both raw scores,
+0-100 accuracy values, and per-player HD use.
 
 ### Test-Mode osu! Integration Routes
 
@@ -306,9 +323,11 @@ Bind the inspected lobby for recorded replay or future live games:
 ```
 
 `replay` starts at the match's documented `first_event_id`; `live` starts after `latest_event_id` at bind time. Map
-setup persists the expected slot, beatmap ID, lobby mods, per-side player mods, and scoring type in `match_state.test_binding`. The result route
+setup persists the expected slot, beatmap ID, lobby mods, allowed optional mods, per-side player mods, and scoring type
+in `match_state.test_binding`. The result route
 returns `canApply: true` only when the game is finished, the beatmap and scoring type match, both mapped users have
-scores, and all expected lobby/player mods are present. Accuracy games return values in the portal's 0-100 format.
+scores, all expected lobby/player mods are present, and restricted optional mods are respected. Accuracy games return
+values in the portal's 0-100 format.
 The Integration tab applies those values through the normal `/score` endpoint, then consumes the osu! event. For a
 recipe/tie replay it retains the expected setup and advances to the next recorded game.
 
@@ -461,6 +480,17 @@ For normal score win conditions, score submission cross-checks the matching fini
 player IDs, and raw scores. HD usage from osu! match history is authoritative and each HD score is divided by `1.06`
 before winner comparison. The referee HD toggles remain the fallback when match history is unavailable or has not yet
 published the matching game.
+
+Each `mappool` row may set `win_con` to `acc` or `accuracy`; blank, `score`, and `scorev2` use ScoreV2 score. The
+lobby remains on ScoreV2 for accuracy maps, but winner comparison uses the osu! API's per-player accuracy. After both
+Bancho score announcements arrive, the match panel correlates that exact score pair with the completed osu! game and
+fills both accuracy inputs automatically. It retries briefly for osu! history propagation and leaves manual percentage
+entry available as a fallback.
+
+The optional `mods` column accepts comma-, slash-, pipe-, plus-, or space-separated osu! acronyms: `HD`, `HR`, `DT`,
+`NC`, `HT`, `EZ`, `FL`, `SO`, and `AP`. A populated value configures `!mp mods Freemod` (plus `NF` when enabled) and
+then sends exactly those values through `!mp allowed_mods`. A blank value preserves the normal pool mod setup. Invalid
+win conditions or mod acronyms stop mappool loading/setup with an explicit configuration error.
 
 Other mutation bodies:
 

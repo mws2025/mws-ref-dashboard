@@ -46,6 +46,7 @@ interface RecipePickSetup {
   notices: string[]
   beatmapId?: string
   mapTitle?: string
+  winCondition: "score" | "accuracy"
 }
 
 interface ScoreSubmitOutcome {
@@ -184,7 +185,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
   const [scoreSubmitting, setScoreSubmitting] = useState(false)
   const [setupSubmitting, setSetupSubmitting] = useState(false)
-  const [detectedScores, setDetectedScores] = useState<{ slot: string; run: number; a?: number; b?: number }>({ slot: "", run: 0 })
+  const [detectedScores, setDetectedScores] = useState<{
+    slot: string
+    run: number
+    a?: number
+    b?: number
+    rawA?: number
+    rawB?: number
+  }>({ slot: "", run: 0 })
   const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
   const ircMessagesRef = useRef<LiveMsg[]>([])
@@ -256,8 +264,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         if (currentSlot) {
           setDetectedScores((current) => {
             const base = current.slot === currentSlot ? current : { slot: currentSlot, run: 0 }
-            if (event.player?.toLowerCase() === match.playerA.toLowerCase()) return { ...base, a: event.value }
-            if (event.player?.toLowerCase() === match.playerB.toLowerCase()) return { ...base, b: event.value }
+            if (event.player?.toLowerCase() === match.playerA.toLowerCase()) return { ...base, a: event.value, rawA: event.value }
+            if (event.player?.toLowerCase() === match.playerB.toLowerCase()) return { ...base, b: event.value, rawB: event.value }
             return current
           })
         }
@@ -553,6 +561,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           pool: "WC",
           map: wildcardTitle,
           beatmapId: wildcardBeatmapId,
+          winCondition: data.recipeSetup.winCondition,
+          allowedMods: data.recipeSetup.allowedMods,
           bpm: 0,
           ar: 0,
           cs: 0,
@@ -781,15 +791,85 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const baseBanLimit = baseBanLimitForRound(match.round)
   const banLimitReached = isBanLimitReached(activeBanCount, manualMapActions ? baseBanLimit : MAX_MATCH_BANS)
   const activeSlot = flowState?.currentSlot
-  const accuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
-    event.status === "active" &&
-    event.target?.toLowerCase() === activeSlot.toLowerCase() &&
-    (
-      event.recipeId === 12 ||
-      event.payload.copiedEffectType === "accuracy_mode" ||
-      event.payload.wildcardWinCondition === "accuracy"
+  const activeMap = activeSlot
+    ? liveMappool?.find((map) => map.slot.toLowerCase() === activeSlot.toLowerCase())
+    : undefined
+  const accuracyMode = Boolean(activeSlot && (
+    activeMap?.winCondition === "accuracy" ||
+    recipeEvents.some((event) =>
+      event.status === "active" &&
+      event.target?.toLowerCase() === activeSlot.toLowerCase() &&
+      (
+        event.recipeId === 12 ||
+        event.payload.copiedEffectType === "accuracy_mode" ||
+        event.payload.wildcardWinCondition === "accuracy"
+      )
     )
   ))
+  const accuracyLookupKeyRef = useRef("")
+  useEffect(() => {
+    const beatmapId = Number(activeMap?.beatmapId)
+    const playerAOsuId = Number(match.playerAOsuId)
+    const playerBOsuId = Number(match.playerBOsuId)
+    if (
+      !accuracyMode || !activeSlot || !liveLobbyUrl ||
+      !Number.isSafeInteger(beatmapId) || beatmapId <= 0 ||
+      !Number.isSafeInteger(playerAOsuId) || playerAOsuId <= 0 ||
+      !Number.isSafeInteger(playerBOsuId) || playerBOsuId <= 0 ||
+      detectedScores.slot !== activeSlot ||
+      detectedScores.rawA === undefined || detectedScores.rawB === undefined
+    ) return
+
+    const lookupKey = `${activeSlot}:${detectedScores.run}:${detectedScores.rawA}:${detectedScores.rawB}`
+    if (accuracyLookupKeyRef.current === lookupKey) return
+    accuracyLookupKeyRef.current = lookupKey
+    let cancelled = false
+
+    const detect = async () => {
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_500))
+        const response = await fetch(`/api/match/${match.id}/detect-result`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lobbyUrl: liveLobbyUrl,
+            beatmapId,
+            playerAOsuId,
+            playerBOsuId,
+            scoreA: detectedScores.rawA,
+            scoreB: detectedScores.rawB,
+          }),
+        })
+        if (!response.ok) break
+        const data = await response.json() as {
+          pending?: boolean
+          result?: { accuracyA: number; accuracyB: number }
+        }
+        if (data.result && !cancelled) {
+          setDetectedScores((current) => current.slot === activeSlot
+            ? { ...current, a: data.result?.accuracyA, b: data.result?.accuracyB }
+            : current)
+          return
+        }
+        if (!data.pending) break
+      }
+    }
+    void detect()
+    return () => { cancelled = true }
+  }, [
+    accuracyMode,
+    activeMap?.beatmapId,
+    activeSlot,
+    detectedScores.rawA,
+    detectedScores.rawB,
+    detectedScores.run,
+    detectedScores.slot,
+    liveLobbyUrl,
+    match.id,
+    match.playerAOsuId,
+    match.playerBOsuId,
+  ])
   const wildcardRewardRequired = Boolean(activeSlot && recipeEvents.some((event) =>
     event.status === "active" &&
     event.target?.toLowerCase() === activeSlot.toLowerCase() &&
