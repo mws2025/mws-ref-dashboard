@@ -18,6 +18,7 @@ import {
   isValidScheduleDate,
   isTiebreakerReady,
   isMissCountWinCondition,
+  latestRoundScheduleMatches,
   lobbyInviteTarget,
   lobbyModsForPool,
   nextPlayerAfterPick,
@@ -83,6 +84,31 @@ describe("lobby mods", () => {
 })
 
 describe("match progression", () => {
+  test("shows only the latest available tournament round in the schedule", () => {
+    const matches = [
+      { id: "1", round: "Round of 32" },
+      { id: "2", round: "RO16" },
+      { id: "3", round: "Round of 16" },
+    ]
+    expect(latestRoundScheduleMatches(matches).map((match) => match.id)).toEqual(["2", "3"])
+
+    expect(latestRoundScheduleMatches([
+      ...matches,
+      { id: "4", round: "Quarterfinals" },
+      { id: "5", round: "Semifinals" },
+      { id: "6", round: "Finals" },
+      { id: "7", round: "Grand Finals" },
+    ]).map((match) => match.id)).toEqual(["7"])
+  })
+
+  test("keeps unknown round schedules visible when no configured round is present", () => {
+    const matches = [
+      { id: "1", round: "Qualifier A" },
+      { id: "2", round: "Qualifier B" },
+    ]
+    expect(latestRoundScheduleMatches(matches)).toEqual(matches)
+  })
+
   test("alternates from the picker regardless of winner", () => {
     expect(nextPlayerAfterPick("Player A", "Player A", "Player B")).toBe("Player B")
     expect(nextPlayerAfterPick("Player B", "Player A", "Player B")).toBe("Player A")

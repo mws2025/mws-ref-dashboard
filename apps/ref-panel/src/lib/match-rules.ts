@@ -11,6 +11,40 @@ export type FinishedScoreAnnouncement = {
 export const MAX_MATCH_BANS = 4
 export const HD_SCORE_MULTIPLIER = 1.06
 
+const TOURNAMENT_ROUND_RANKS = new Map<string, number>([
+  ["ro32", 0],
+  ["round32", 0],
+  ["roundof32", 0],
+  ["ro16", 1],
+  ["round16", 1],
+  ["roundof16", 1],
+  ["qf", 2],
+  ["quarterfinal", 2],
+  ["quarterfinals", 2],
+  ["sf", 3],
+  ["semifinal", 3],
+  ["semifinals", 3],
+  ["final", 4],
+  ["finals", 4],
+  ["gf", 5],
+  ["grandfinal", 5],
+  ["grandfinals", 5],
+])
+
+export function tournamentRoundRank(round: string): number | null {
+  const normalized = round.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
+  return TOURNAMENT_ROUND_RANKS.get(normalized) ?? null
+}
+
+export function latestRoundScheduleMatches<T extends { round: string }>(matches: readonly T[]): T[] {
+  const latestRank = matches.reduce((highest, match) => {
+    const rank = tournamentRoundRank(match.round)
+    return rank === null ? highest : Math.max(highest, rank)
+  }, -1)
+  if (latestRank < 0) return [...matches]
+  return matches.filter((match) => tournamentRoundRank(match.round) === latestRank)
+}
+
 export function baseBanLimitForRound(round: string): number {
   const normalized = round.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
   return normalized === "ro32" || normalized === "roundof32" ? 2 : MAX_MATCH_BANS

@@ -44,6 +44,7 @@ import { isTerminalMatchStatus, statusVariant } from "@/lib/mappool"
 import {
   formatScheduleDateTime,
   formatScheduleTimeInput,
+  latestRoundScheduleMatches,
   normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
@@ -223,7 +224,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
 
   const yourMatches = matchesResponse?.yourMatches ?? []
   const activeMatches = matchesResponse?.activeMatches ?? []
-  const scheduleMatches = matchesResponse?.matches ?? []
+  const scheduleMatches = latestRoundScheduleMatches(matchesResponse?.matches ?? [])
   const sortedScheduleMatches = [...scheduleMatches].sort((left, right) => {
     let order = compareNatural(
       scheduleSortValue(left, scheduleSort.key),
