@@ -24,7 +24,7 @@ import {
   lobbyModsForPool,
   nextPlayerAfterPick,
   normalizeHdScore,
-  parseMappoolOptionalMods,
+  parseMappoolMods,
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
@@ -84,12 +84,11 @@ describe("lobby mods", () => {
     expect(caramelWinCondition("combo")).toBeNull()
   })
 
-  test("parses optional mappool mods and rejects unsupported values", () => {
-    expect(parseMappoolOptionalMods("")).toEqual([])
-    expect(parseMappoolOptionalMods("HD")).toEqual(["HD"])
-    expect(parseMappoolOptionalMods("HD, HR/DT")).toEqual(["HD", "HR", "DT"])
-    expect(parseMappoolOptionalMods("HD,HD")).toEqual(["HD"])
-    expect(parseMappoolOptionalMods("RX")).toBeNull()
+  test("parses optional mappool mods without enforcing an acronym list", () => {
+    expect(parseMappoolMods("")).toEqual([])
+    expect(parseMappoolMods("HD")).toEqual(["HD"])
+    expect(parseMappoolMods("HD, HR/DT")).toEqual(["HD", "HR", "DT"])
+    expect(parseMappoolMods("RX")).toEqual(["RX"])
   })
 })
 

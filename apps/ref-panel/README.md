@@ -323,10 +323,10 @@ Bind the inspected lobby for recorded replay or future live games:
 ```
 
 `replay` starts at the match's documented `first_event_id`; `live` starts after `latest_event_id` at bind time. Map
-setup persists the expected slot, beatmap ID, lobby mods, allowed optional mods, per-side player mods, and scoring type
+setup persists the expected slot, beatmap ID, lobby mods, per-side player mods, and scoring type
 in `match_state.test_binding`. The result route
 returns `canApply: true` only when the game is finished, the beatmap and scoring type match, both mapped users have
-scores, all expected lobby/player mods are present, and restricted optional mods are respected. Accuracy games return
+scores, and all expected lobby/player mods are present. Accuracy games return
 values in the portal's 0-100 format.
 The Integration tab applies those values through the normal `/score` endpoint, then consumes the osu! event. For a
 recipe/tie replay it retains the expected setup and advances to the next recorded game.
@@ -401,8 +401,7 @@ stored as another `match_maps` row. TB is rejected until both players are one po
 to clear the latest picked or completed row and reverse
 its map/recipe rewards; `unpick` does not require `player`.
 
-Map setup preserves the pool's required mods and sends `!mp allowed_mods HD` for NM/PS/HR/DT maps. Recipe-granted
-optional mods are added to that command. FM/TB remain Freemod.
+Map setup preserves the pool's required mods. FM/TB remain Freemod.
 
 `POST /api/match/:matchId/score` derives the winner from recipe-adjusted scores:
 
@@ -487,10 +486,10 @@ Bancho score announcements arrive, the match panel correlates that exact score p
 fills both accuracy inputs automatically. It retries briefly for osu! history propagation and leaves manual percentage
 entry available as a fallback.
 
-The optional `mods` column accepts comma-, slash-, pipe-, plus-, or space-separated osu! acronyms: `HD`, `HR`, `DT`,
-`NC`, `HT`, `EZ`, `FL`, `SO`, and `AP`. A populated value configures `!mp mods Freemod` (plus `NF` when enabled) and
-then sends exactly those values through `!mp allowed_mods`. A blank value preserves the normal pool mod setup. Invalid
-win conditions or mod acronyms stop mappool loading/setup with an explicit configuration error.
+The optional `mods` column is informational about the mods players may choose. Any non-empty value configures
+`!mp mods Freemod` (plus `NF` when enabled); no separate mod-restriction command is sent. A blank value preserves the
+normal pool mod setup. The portal does not validate the listed mod acronyms. Invalid win conditions still stop mappool
+loading/setup with an explicit configuration error.
 
 Other mutation bodies:
 

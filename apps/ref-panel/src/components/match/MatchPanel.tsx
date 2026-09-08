@@ -41,7 +41,6 @@ type EventKind = "join" | "leave" | "roll" | "score" | "map" | "start" | "abort"
 interface RecipePickSetup {
   eventIds: string[]
   mods: string
-  allowedMods: string[]
   commandsBefore: string[]
   notices: string[]
   beatmapId?: string
@@ -562,7 +561,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           map: wildcardTitle,
           beatmapId: wildcardBeatmapId,
           winCondition: data.recipeSetup.winCondition,
-          allowedMods: data.recipeSetup.allowedMods,
+          optionalMods: [],
           bpm: 0,
           ar: 0,
           cs: 0,
@@ -704,8 +703,6 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
     }
     for (const command of recipeSetup?.commandsBefore ?? []) await sendIrc(channel, command)
     await sendIrc(channel, `!mp mods ${recipeSetup?.mods || lobbyModsForPool(map.pool, enforceNF)}`)
-    const allowedMods = recipeSetup?.allowedMods ?? (["FM", "TB"].includes(map.pool) ? [] : ["HD"])
-    if (allowedMods.length > 0) await sendIrc(channel, `!mp allowed_mods ${allowedMods.join(" ")}`)
     for (const notice of recipeSetup?.notices ?? []) await sendIrc(channel, notice)
     await sendIrc(channel, "!mp timer 120")
   }

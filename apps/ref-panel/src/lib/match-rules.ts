@@ -285,17 +285,11 @@ export function lobbyModsForPool(pool: string, enforceNF: boolean): string {
 
 export type CaramelWinCondition = "score" | "accuracy"
 
-const OPTIONAL_MAP_MODS = new Set(["HD", "HR", "DT", "NC", "HT", "EZ", "FL", "SO", "AP"])
-
-export function parseMappoolOptionalMods(value: string): string[] | null {
-  const trimmed = value.trim()
-  if (!trimmed) return []
-  const mods = trimmed
+export function parseMappoolMods(value: string): string[] {
+  return value.trim()
     .split(/[,/|+\s]+/)
     .map((mod) => mod.trim().toUpperCase())
     .filter(Boolean)
-  if (mods.length === 0 || mods.some((mod) => !OPTIONAL_MAP_MODS.has(mod))) return null
-  return [...new Set(mods)]
 }
 
 export function caramelLobbyMods(value: string, enforceNF: boolean): string | null {

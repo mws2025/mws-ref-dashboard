@@ -23,7 +23,7 @@ export interface PoolMap {
   map: string
   beatmapId?: string
   winCondition?: "score" | "accuracy"
-  allowedMods?: string[]
+  optionalMods?: string[]
   bpm: number
   ar: number
   cs: number
@@ -95,7 +95,6 @@ export interface TestExpectedSetup {
   lobbyMods: string
   playerAMods: string[]
   playerBMods: string[]
-  allowedMods: string[]
   scoringType: string
   winCondition: "score" | "accuracy"
 }
