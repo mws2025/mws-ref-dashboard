@@ -4918,22 +4918,22 @@ app.post("/api/match/:matchId/remind", async (c) => {
     return c.json({ error: "Match not found" }, 404)
   }
 
-  // Build player lookup: player_id | osu_id | lowercase name → discord ping or name
+  // Resolve every match-side identifier to the player's Discord snowflake.
   const playerRecords = sheetRowsToRecords(playerValues)
-  const playerPingMap = new Map<string, string>()
+  const playerDiscordMap = new Map<string, string>()
   for (const p of playerRecords) {
     const pid      = firstValue(p, ["player_id", "id"])
     const osuId    = firstValue(p, ["osu_id"])
     const name     = firstValue(p, ["name", "username"])
     const discordId = firstValue(p, ["discord_id"]).trim()
-    const ping = /^\d{15,20}$/.test(discordId) ? `<@${discordId}>` : name
-    if (pid)  playerPingMap.set(pid, ping)
-    if (osuId) playerPingMap.set(osuId, ping)
-    if (name)  playerPingMap.set(name.toLowerCase(), ping)
+    if (!/^\d{15,20}$/.test(discordId)) continue
+    if (pid) playerDiscordMap.set(pid, discordId)
+    if (osuId) playerDiscordMap.set(osuId, discordId)
+    if (name) playerDiscordMap.set(name.toLowerCase(), discordId)
   }
 
-  function resolvePing(raw: string): string {
-    return playerPingMap.get(raw) ?? playerPingMap.get(raw.toLowerCase()) ?? raw
+  function resolveDiscordId(raw: string): string | undefined {
+    return playerDiscordMap.get(raw) ?? playerDiscordMap.get(raw.toLowerCase())
   }
 
   const rawA  = firstValue(matchRecord, ["player_a", "playera"])
@@ -4953,14 +4953,21 @@ app.post("/api/match/:matchId/remind", async (c) => {
     } catch { /* leave "soon" */ }
   }
 
-  const pingA = resolvePing(rawA)
-  const pingB = resolvePing(rawB)
-  const content = `${pingA} ${pingB} Your match is starting ${timeDisplay}. Invites will be sent shortly. Good luck, have fun!`
+  const discordIdA = resolveDiscordId(rawA)
+  const discordIdB = resolveDiscordId(rawB)
+  if (!discordIdA || !discordIdB) {
+    const missing = [!discordIdA ? rawA : "", !discordIdB ? rawB : ""].filter(Boolean).join(", ")
+    return c.json({ error: `Missing valid discord_id for: ${missing}` }, 409)
+  }
+  const content = `<@${discordIdA}> <@${discordIdB}> Your match is starting ${timeDisplay}. Invites will be sent shortly. Good luck, have fun!`
 
   const res = await fetch(reminderWebhook, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      content,
+      allowed_mentions: { users: [discordIdA, discordIdB] },
+    }),
   })
 
   if (!res.ok) {

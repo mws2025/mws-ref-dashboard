@@ -355,7 +355,7 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 IRC streams require an exact `#mp_<id>` channel. Lobby creation is serialized by the relay and correlated to the exact
 lobby title, so concurrent referee sessions cannot claim the same BanchoBot creation response. The client also rejects
 any SSE event whose embedded channel does not exactly match its mounted lobby.
-| `POST` | `/api/match/:matchId/remind` | Posts the configured Discord match reminder. |
+| `POST` | `/api/match/:matchId/remind` | Mentions both players by `players.discord_id` in the configured Discord match reminder. |
 
 ### Mutation Bodies
 
