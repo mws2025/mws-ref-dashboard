@@ -47,7 +47,7 @@ export function latestRoundScheduleMatches<T extends { round: string }>(matches:
 
 export function baseBanLimitForRound(round: string): number {
   const normalized = round.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
-  return normalized === "ro32" || normalized === "roundof32" ? 2 : MAX_MATCH_BANS
+  return normalized === "ro32" || normalized === "roundof32" || normalized === "ro16" || normalized === "roundof16" || normalized === "round16" ? 2 : MAX_MATCH_BANS
 }
 
 export function isBanLimitReached(currentBans: number, limit = MAX_MATCH_BANS): boolean {
