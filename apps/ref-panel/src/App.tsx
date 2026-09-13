@@ -23,12 +23,12 @@ function getApiUrl(path: string): string {
   return `${origin}${path}`
 }
 
-function MatchPanelRoute({ onBack, isDemo, testMode }: { onBack: () => void; isDemo: boolean; testMode: boolean }) {
+function MatchPanelRoute({ onBack, isDemo, testMode, isAdmin }: { onBack: () => void; isDemo: boolean; testMode: boolean; isAdmin: boolean }) {
   const { state } = useLocation()
   const match = (state as { match?: Match } | null)?.match
 
   if (!match) return <Navigate to="/dashboard" replace />
-  return <MatchPanel match={match} onBack={onBack} isDemo={isDemo} testMode={testMode} />
+  return <MatchPanel match={match} onBack={onBack} isDemo={isDemo} testMode={testMode} isAdmin={isAdmin} />
 }
 
 function ErrorRoute() {
@@ -132,7 +132,7 @@ function App() {
           onLogout={() => { void logout() }}
         />
       } />
-      <Route path="/match/:matchId" element={<MatchPanelRoute onBack={() => navigate("/dashboard")} isDemo={sessionUser?.osu_id === 0} testMode={testMode} />} />
+      <Route path="/match/:matchId" element={<MatchPanelRoute onBack={() => navigate("/dashboard")} isDemo={sessionUser?.osu_id === 0} testMode={testMode} isAdmin={sessionUser?.is_admin === true} />} />
       <Route path="/error/:code" element={<ErrorRoute />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

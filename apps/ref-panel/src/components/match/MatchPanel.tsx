@@ -162,9 +162,10 @@ interface Props {
   onBack: () => void
   isDemo?: boolean
   testMode?: boolean
+  isAdmin?: boolean
 }
 
-export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: Props) {
+export function MatchPanel({ match, onBack, isDemo = false, testMode = false, isAdmin = false }: Props) {
   const [poolWidth, setPoolWidth] = useState(770)
   const [selectedMap, setSelectedMap] = useState<PoolMap | null>(null)
   const [liveMappool, setLiveMappool] = useState<PoolMap[] | null>(null)
@@ -172,6 +173,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const [liveScoreA, setLiveScoreA] = useState<number>(match.scoreA ?? 0)
   const [liveScoreB, setLiveScoreB] = useState<number>(match.scoreB ?? 0)
   const [liveMatchStatus, setLiveMatchStatus] = useState(match.status)
+  const [liveReferee, setLiveReferee] = useState(match.referee)
   const [matchRules, setMatchRules] = useState<Record<string, string>>({})
   const [enforceNF, setEnforceNF] = useState(false)
   const [banOrder, setBanOrder] = useState("ABAB")
@@ -621,8 +623,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
         toast.error(err.error ?? "Failed to post result")
         return
       }
-      const data = await res.json() as { state?: MatchFlowState }
-      setLiveMatchStatus("completed")
+      const data = await res.json() as { state?: MatchFlowState; status?: "completed" | "forfeit" }
+      setLiveMatchStatus(data.status ?? "completed")
       if (data.state) setFlowState(data.state)
       toast.success("Match result posted")
     })
@@ -741,11 +743,13 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
       credentials: "include",
     })
     if (!res.ok) {
-      console.error("create-lobby failed", await res.text())
+      const error = await res.json().catch(() => null) as { error?: string } | null
+      toast.error(error?.error ?? "Failed to create lobby")
       return
     }
-    const data = await res.json() as { lobbyUrl: string; channel: string; followUpCmds: string[] }
+    const data = await res.json() as { lobbyUrl: string; channel: string; followUpCmds: string[]; referee?: string }
     setLiveLobbyUrl(data.lobbyUrl)
+    if (data.referee) setLiveReferee(data.referee)
     setFlowState((prev) => prev && prev.phase === "lobby" ? { ...prev, phase: "roll", updatedAt: new Date().toISOString() } : prev)
     for (const cmd of data.followUpCmds) {
       await sendIrc(data.channel, cmd)
@@ -961,7 +965,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           invA={liveInventory?.a ?? INVENTORY_A}
           invB={liveInventory?.b ?? INVENTORY_B}
           round={match.round}
-          refName={match.referee ?? "-"}
+          refName={liveReferee ?? "-"}
           streamer={match.streamer}
           onInvAChange={(key: IngKey, delta: number) => setLiveInventory((prev) => {
             if (!prev) return prev
@@ -1018,10 +1022,16 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ winner, playerA: match.playerA, playerB: match.playerB }),
             }).then(async (res) => {
-              if (!res.ok) { console.error("forfeit failed", await res.text()); return }
+              if (!res.ok) {
+                const error = await res.json().catch(() => null) as { error?: string } | null
+                toast.error(error?.error ?? "Failed to set forfeit")
+                return
+              }
+              const data = await res.json() as { scoreA?: number; scoreB?: number }
               setLiveMatchStatus("forfeit")
-              if (winner === match.playerA) setLiveScoreB(-1)
-              else setLiveScoreA(-1)
+              setLiveScoreA(data.scoreA ?? (winner === match.playerA ? 0 : -1))
+              setLiveScoreB(data.scoreB ?? (winner === match.playerB ? 0 : -1))
+              toast.success("Forfeit result posted")
             })
           }}
           onResetMatch={() => void resetMatch()}
@@ -1034,6 +1044,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
           matchStatus={liveMatchStatus}
           hasLobby={liveLobbyUrl !== undefined}
           isDemo={isDemo}
+          isAdmin={isAdmin}
           postResultReady={flowState?.phase === "ready_result"}
           testResultUnlocked={false}
         />

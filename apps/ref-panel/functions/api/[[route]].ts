@@ -9,7 +9,9 @@ import {
   canClaimRefereeAssignment,
   compareMapResults,
   effectiveBanLimitForRound,
+  formatForfeitResultDescription,
   formatMatchResultSections,
+  formatMatchResultTitle,
   formatLobbyMods,
   formatLobbyTitle,
   formatRefereeIrcMessage,
@@ -30,6 +32,7 @@ import {
   parseCreatedLobbyAnnouncement,
   refereeAssignments,
   refereeIsAssigned,
+  resolveLobbyReferees,
   scheduleDateSerial,
 } from "../../src/lib/match-rules"
 
@@ -3865,7 +3868,6 @@ async function buildAndPostResultEmbed(
   const resultWebhook = configMap.get("result webhook")?.trim()
   if (!resultWebhook) return
 
-  const abbreviation = configMap.get("abbreviation") ?? "MWS"
   const match        = await getMatchById(env, matchId)
   const round        = match?.round ?? ""
   const lobbyUrl     = match?.lobbyUrl ?? ""
@@ -3968,8 +3970,7 @@ async function buildAndPostResultEmbed(
   const footerParts: string[] = []
   if (durationStr) footerParts.push(`Duration: ${durationStr}`)
 
-  const roundPart = round ? `${round} - ` : ""
-  const title     = `${abbreviation} ${roundPart}Match ${matchId}`
+  const title = formatMatchResultTitle(round, matchId)
 
   const fields = [
     { name: "Bans",          value: sections.bans,     inline: false },
@@ -3989,6 +3990,34 @@ async function buildAndPostResultEmbed(
         fields,
         footer:      footerParts.length > 0 ? { text: footerParts.join(" · ") } : undefined,
         timestamp:   new Date().toISOString(),
+      }],
+    }),
+  }).catch(() => {})
+}
+
+async function buildAndPostForfeitResultEmbed(
+  env: Bindings,
+  matchId: string,
+  round: string,
+  playerA: string,
+  playerB: string,
+  scoreA: number,
+  scoreB: number,
+  winner: string,
+): Promise<void> {
+  const configMap = await getConfigMap(env)
+  const resultWebhook = configMap.get("result webhook")?.trim()
+  if (!resultWebhook) return
+
+  const winnerIsA = winner.trim().toLowerCase() === playerA.trim().toLowerCase()
+  await fetch(resultWebhook, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      embeds: [{
+        title: formatMatchResultTitle(round, matchId),
+        color: winnerIsA ? 0xa4564e : 0x6f8ea5,
+        description: formatForfeitResultDescription(playerA, playerB, scoreA, scoreB, winner),
       }],
     }),
   }).catch(() => {})
@@ -4020,6 +4049,44 @@ app.post("/api/match/:matchId/post-result", async (c) => {
     if (winner !== playerA && winner !== playerB) return c.json({ error: "winner must be one of the match players" }, 400)
 
     const before = await getMatchById(c.env, matchId)
+    if (!before) return c.json({ error: "Match not found" }, 404)
+    if (playerA !== before.playerA || playerB !== before.playerB) {
+      return c.json({ error: "Players do not match this match" }, 400)
+    }
+    if (before.status === "completed" || before.status === "forfeit") {
+      let isAdmin = false
+      try {
+        isAdmin = sessionUser ? await isSessionAdmin(c.env, sessionUser) : false
+      } catch {
+        return c.json({ error: "Unable to verify admin access" }, 503)
+      }
+      if (!isAdmin) return c.json({ error: "Admin access required to repost a result" }, 403)
+    }
+    if (before.status === "forfeit") {
+      const forfeitScoreA = before.scoreA ?? (winner === playerA ? 0 : -1)
+      const forfeitScoreB = before.scoreB ?? (winner === playerB ? 0 : -1)
+      const forfeitWinner = before.winner === playerA || before.winner === playerB ? before.winner : winner
+      await buildAndPostForfeitResultEmbed(
+        c.env,
+        matchId,
+        before.round,
+        playerA,
+        playerB,
+        forfeitScoreA,
+        forfeitScoreB,
+        forfeitWinner,
+      )
+      await appendAuditLog(
+        c.env,
+        sessionUser?.username ?? "unknown",
+        "repost_forfeit_result",
+        "match",
+        matchId,
+        JSON.stringify(before),
+        JSON.stringify({ winner: forfeitWinner, scoreA: forfeitScoreA, scoreB: forfeitScoreB }),
+      ).catch(() => {})
+      return c.json({ ok: true, status: "forfeit", winner: forfeitWinner, scoreA: forfeitScoreA, scoreB: forfeitScoreB })
+    }
     await updateMatchFields(c.env, matchId, {
       status: "completed",
       winner,
@@ -4042,7 +4109,7 @@ app.post("/api/match/:matchId/post-result", async (c) => {
       JSON.stringify({ status: "completed", winner, scoreA, scoreB }),
     ).catch(() => {})
     await buildAndPostResultEmbed(c.env, matchId, playerA, playerB, scoreA, scoreB, winner, state)
-    return c.json({ ok: true, winner, scoreA, scoreB, state })
+    return c.json({ ok: true, status: "completed", winner, scoreA, scoreB, state })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Post result failed" }, 500)
   }
@@ -4795,6 +4862,7 @@ app.get("/api/irc/stream", async (c) => {
 app.post("/api/match/:matchId/create-lobby", async (c) => {
   const matchId = c.req.param("matchId")
   const sessionUser = await readSessionUser(c)
+  if (!sessionUser) return c.json({ error: "Unauthorized" }, 401)
   const relayUrl = c.env.IRC_RELAY_URL?.trim()
   const relaySecret = c.env.IRC_RELAY_SECRET?.trim()
   if (!relayUrl || !relaySecret) {
@@ -4803,12 +4871,23 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
 
   const match = await getMatchById(c.env, matchId)
   if (!match) return c.json({ error: "Match not found" }, 404)
+  const operatorUsername = sessionUser.username
   const playerA = match.playerA
   const playerB = match.playerB
-  const refereeUsernames = refereeAssignments(match.referee)
-  if (sessionUser?.username && !refereeIsAssigned(match.referee, sessionUser.username)) {
-    refereeUsernames.push(sessionUser.username)
+  const originalReferee = match.referee ?? ""
+  const assignedToCurrentUser = refereeIsAssigned(originalReferee, operatorUsername)
+  const hasDifferentAssignedReferee = refereeAssignments(originalReferee).length > 0 && !assignedToCurrentUser
+  let operatorIsAdmin = false
+  if (hasDifferentAssignedReferee) {
+    try {
+      operatorIsAdmin = await isSessionAdmin(c.env, sessionUser)
+    } catch {
+      return c.json({ error: "Unable to verify admin access" }, 503)
+    }
   }
+  const lobbyReferees = resolveLobbyReferees(originalReferee, operatorUsername, operatorIsAdmin)
+  const referee = lobbyReferees.referee
+  const refereeUsernames = lobbyReferees.usernames
 
   // Read config for lobby settings
   const configMap = await getConfigMap(c.env)
@@ -4824,6 +4903,22 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     `!mp invite ${lobbyInviteTarget(playerA, match.playerAOsuId)}`,
     `!mp invite ${lobbyInviteTarget(playerB, match.playerBOsuId)}`,
   ]
+  const adminTookOver = lobbyReferees.adminTookOver
+
+  async function persistAdminTakeover(): Promise<void> {
+    if (!adminTookOver) return
+    await updateMatchField(c.env, matchId, "referee", referee)
+    await appendAuditLog(
+      c.env,
+      operatorUsername,
+      "admin_lobby_takeover",
+      "match",
+      matchId,
+      JSON.stringify({ referee: originalReferee }),
+      JSON.stringify({ referee }),
+    ).catch(() => {})
+  }
+  await persistAdminTakeover()
 
   // #TEST-MODE-START
   if (isTestMode(configMap)) {
@@ -4856,7 +4951,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
         }),
       }).catch(() => {})
     }
-    return c.json({ ok: true, lobbyUrl: fakeLobbyUrl, channel: fakeChannel, mpId: fakeId, followUpCmds: fakeFollowUpCmds })
+    return c.json({ ok: true, lobbyUrl: fakeLobbyUrl, channel: fakeChannel, mpId: fakeId, followUpCmds: fakeFollowUpCmds, referee })
   }
   // #TEST-MODE-END
 
@@ -4896,7 +4991,6 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
   } catch {
     // non-fatal — ref can see it in UI
   }
-
   // Post Discord staff webhook (best-effort)
   if (staffWebhook) {
     await fetch(staffWebhook, {
@@ -4916,7 +5010,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
     }).catch(() => {})
   }
 
-  return c.json({ ok: true, lobbyUrl, channel, mpId, followUpCmds })
+  return c.json({ ok: true, lobbyUrl, channel, mpId, followUpCmds, referee })
 })
 
 app.post("/api/match/:matchId/close-lobby", async (c) => {
@@ -5582,17 +5676,32 @@ app.post("/api/match/:matchId/forfeit", async (c) => {
     return c.json({ error: "winner, playerA, playerB required" }, 400)
   }
 
-  const loserIsA = winner === playerB
-  const fields: Record<string, string> = {
-    status: "forfeit",
-    winner,
-    score_a: loserIsA ? "-1" : "0",
-    score_b: loserIsA ? "0" : "-1",
-  }
-
-
   try {
+    const match = await getMatchById(c.env, matchId)
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    if (playerA !== match.playerA || playerB !== match.playerB) {
+      return c.json({ error: "Players do not match this match" }, 400)
+    }
+    if (winner !== playerA && winner !== playerB) {
+      return c.json({ error: "winner must be one of the match players" }, 400)
+    }
+
+    const loserIsA = winner === playerB
+    const scoreA = loserIsA ? -1 : 0
+    const scoreB = loserIsA ? 0 : -1
+    const fields: Record<string, string> = {
+      status: "forfeit",
+      winner,
+      score_a: String(scoreA),
+      score_b: String(scoreB),
+    }
     await updateMatchFields(c.env, matchId, fields)
+    await writeMatchFlowState(c.env, {
+      ...(await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))),
+      phase: "completed",
+      turnPlayer: undefined,
+      currentSlot: undefined,
+    })
     await appendAuditLog(
       c.env,
       sessionUser?.username ?? "unknown",
@@ -5602,7 +5711,8 @@ app.post("/api/match/:matchId/forfeit", async (c) => {
       "{}",
       JSON.stringify({ winner, loser: loserIsA ? playerA : playerB }),
     ).catch(() => {})
-    return c.json({ ok: true, winner, loser: loserIsA ? playerA : playerB })
+    await buildAndPostForfeitResultEmbed(c.env, matchId, match.round, playerA, playerB, scoreA, scoreB, winner)
+    return c.json({ ok: true, winner, loser: loserIsA ? playerA : playerB, scoreA, scoreB })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Forfeit failed" }, 500)
   }

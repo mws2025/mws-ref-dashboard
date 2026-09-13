@@ -9,6 +9,8 @@ import {
   canClaimRefereeAssignment,
   compareMapResults,
   formatMatchResultSections,
+  formatMatchResultTitle,
+  formatForfeitResultDescription,
   formatRefereeIrcMessage,
   formatScheduleDateTime,
   formatScheduleTimeInput,
@@ -33,6 +35,7 @@ import {
   normalizeScheduleTime,
   refereeAssignments,
   refereeIsAssigned,
+  resolveLobbyReferees,
   scheduleDateSerial,
 } from "../src/lib/match-rules.ts"
 
@@ -203,6 +206,24 @@ describe("referee input and lobby formatting", () => {
     expect(canClaimRefereeAssignment("Existing Ref", "New Ref")).toBe(false)
   })
 
+  test("replaces a different assigned referee only for an admin creating a lobby", () => {
+    expect(resolveLobbyReferees("Assigned Ref", "Admin Ref", true)).toEqual({
+      referee: "Admin Ref",
+      usernames: ["Admin Ref"],
+      adminTookOver: true,
+    })
+    expect(resolveLobbyReferees("Assigned Ref", "Cover Ref", false)).toEqual({
+      referee: "Assigned Ref",
+      usernames: ["Assigned Ref", "Cover Ref"],
+      adminTookOver: false,
+    })
+    expect(resolveLobbyReferees("Admin Ref", "Admin Ref", true)).toEqual({
+      referee: "Admin Ref",
+      usernames: ["Admin Ref"],
+      adminTookOver: false,
+    })
+  })
+
   test("formats and validates schedule input", () => {
     expect(formatScheduleTimeInput("0930")).toBe("09:30")
     expect(formatScheduleTimeInput("9:30")).toBe("9:30")
@@ -264,6 +285,18 @@ describe("referee input and lobby formatting", () => {
 })
 
 describe("match result formatting", () => {
+  test("omits the tournament abbreviation from result titles", () => {
+    expect(formatMatchResultTitle("Round of 32", "6")).toBe("Round of 32 - Match 6")
+    expect(formatMatchResultTitle("", "6")).toBe("Match 6")
+  })
+
+  test("formats a minimal forfeit score and default-win message", () => {
+    const description = formatForfeitResultDescription("teffek", "Fuma", -1, 0, "Fuma")
+    expect(description).toContain("`-1` - `0`")
+    expect(description).toContain("**Fuma wins by default.**")
+    expect(description).not.toContain("osu.ppy.sh")
+  })
+
   test("includes bans, home mods, map winners, and recipe targets", () => {
     expect(formatMatchResultSections(
       "teffek",

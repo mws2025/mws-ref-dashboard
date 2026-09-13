@@ -74,6 +74,20 @@ export function refereeIsAssigned(value: string | undefined, username: string): 
   )
 }
 
+export function resolveLobbyReferees(
+  value: string | undefined,
+  operator: string,
+  operatorIsAdmin: boolean,
+): { referee: string; usernames: string[]; adminTookOver: boolean } {
+  const originalReferee = value?.trim() ?? ""
+  const assigned = refereeAssignments(originalReferee)
+  if (assigned.length > 0 && !refereeIsAssigned(originalReferee, operator) && operatorIsAdmin) {
+    return { referee: operator, usernames: [operator], adminTookOver: true }
+  }
+  if (!refereeIsAssigned(originalReferee, operator)) assigned.push(operator)
+  return { referee: originalReferee, usernames: assigned, adminTookOver: false }
+}
+
 export function canClaimRefereeAssignment(value: string | undefined, username: string): boolean {
   const assigned = refereeAssignments(value)
   return assigned.length === 0 || refereeIsAssigned(value, username)
@@ -139,6 +153,25 @@ export type MatchResultSections = {
   homeMods: string
   rundown: string
   recipes: string
+}
+
+export function formatMatchResultTitle(round: string, matchId: string): string {
+  const normalizedRound = round.trim()
+  return `${normalizedRound ? `${normalizedRound} - ` : ""}Match ${matchId.trim()}`
+}
+
+export function formatForfeitResultDescription(
+  playerA: string,
+  playerB: string,
+  scoreA: number,
+  scoreB: number,
+  winner: string,
+): string {
+  const winnerIsA = winner.trim().toLowerCase() === playerA.trim().toLowerCase()
+  const scoreLine = winnerIsA
+    ? `### 🏆 🔴 **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** 🔵`
+    : `### 🔴 **${playerA}**  \`${scoreA}\` - \`${scoreB}\`  **${playerB}** 🔵 🏆`
+  return `${scoreLine}\n\n**${winner} wins by default.**`
 }
 
 export function formatMatchResultSections(

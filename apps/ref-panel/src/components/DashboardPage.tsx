@@ -99,8 +99,8 @@ function formatMatchDate(raw: string): string {
   return `(${weekday}) ${month} ${d.getDate()}`
 }
 
-function canOpenMatch(match: Match): boolean {
-  return !isTerminalMatchStatus(match.status)
+function canOpenMatch(match: Match, canReopenTerminal = false): boolean {
+  return !isTerminalMatchStatus(match.status) || canReopenTerminal
 }
 
 function compareMatchSchedule(left: Match, right: Match): number {
@@ -225,6 +225,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
   const yourMatches = matchesResponse?.yourMatches ?? []
   const activeMatches = matchesResponse?.activeMatches ?? []
   const scheduleMatches = latestRoundScheduleMatches(matchesResponse?.matches ?? [])
+  const currentRoundMatchIds = new Set(scheduleMatches.map((match) => match.id))
   const sortedScheduleMatches = [...scheduleMatches].sort((left, right) => {
     let order = compareNatural(
       scheduleSortValue(left, scheduleSort.key),
@@ -420,7 +421,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                     </div>
                   </CardHeader>
                   <CardContent className="flex gap-2">
-                    <Button className="flex-1" size="sm" disabled={!canOpenMatch(m)} onClick={() => onOpenMatch(m)}>
+                    <Button className="flex-1" size="sm" disabled={!canOpenMatch(m, isAdmin && currentRoundMatchIds.has(m.id))} onClick={() => onOpenMatch(m)}>
                       Open Ref Panel
                     </Button>
                     {assignmentButton(m)}
@@ -554,7 +555,7 @@ export function DashboardPage({ currentUserName, tournamentName, testMode, canMa
                         </TableCell>
                         <TableCell className="w-[244px]">
                           <div className="grid grid-cols-[72px_108px_32px] justify-end gap-2">
-                            {canOpenMatch(m)
+                            {canOpenMatch(m, isAdmin)
                               ? <Button className="w-[72px]" size="sm" variant="secondary" onClick={() => onOpenMatch(m)}>Open</Button>
                               : <span aria-hidden="true" />}
                             {assignmentButton(m) ?? <span aria-hidden="true" />}

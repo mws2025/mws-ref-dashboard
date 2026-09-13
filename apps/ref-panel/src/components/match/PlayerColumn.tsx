@@ -165,6 +165,7 @@ interface Props {
   matchStatus?: MatchStatus
   hasLobby?: boolean
   isDemo?: boolean
+  isAdmin?: boolean
   postResultReady?: boolean
   testResultUnlocked?: boolean
 }
@@ -185,11 +186,11 @@ export function PlayerColumn({
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit, onResetMatch, onScoreEdit,
   homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
   lobbyNameMismatch, onRetryJoin, onClearLobbyMismatch,
-  matchStatus, hasLobby = false, isDemo = false, postResultReady = false, testResultUnlocked = false,
+  matchStatus, hasLobby = false, isDemo = false, isAdmin = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
   const winsNeeded = Math.ceil(bestOf / 2)
   const isFinished = matchStatus === "completed" || matchStatus === "forfeit"
-  const canPostResult = !isDemo && hasLobby && (isFinished || postResultReady || testResultUnlocked)
+  const canPostResult = !isDemo && ((hasLobby && (isFinished || postResultReady || testResultUnlocked)) || (isAdmin && isFinished))
   const [editingPlayer, setEditingPlayer] = useState<"a" | "b" | null>(null)
   const [confirmAction, setConfirmAction] = useState<LobbyConfirm | null>(null)
   const [joinOpen, setJoinOpen] = useState(false)
@@ -319,7 +320,7 @@ export function PlayerColumn({
           {isDemo && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700">demo</span>}
         </div>
         {/* Setup */}
-        {!hasLobby && (
+        {!hasLobby && !isFinished && (
           <>
             <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo} onClick={() => setConfirmAction("create")}>Create lobby</Button>
             <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo} onClick={() => setJoinOpen(true)}>Join existing</Button>
@@ -328,7 +329,9 @@ export function PlayerColumn({
         <Button size="sm" variant="outline" className="w-full text-xs" disabled={isDemo} onClick={() => setConfirmAction("reminder")}>Match reminder</Button>
         <Separator className="my-2" />
         {/* Result */}
-        <Button size="sm" variant="outline" className="w-full text-xs" disabled={!canPostResult} onClick={() => setConfirmAction("result")}>Post match result</Button>
+        <Button size="sm" variant="outline" className="w-full text-xs" disabled={!canPostResult} onClick={() => setConfirmAction("result")}>
+          {isFinished ? "Repost match result" : "Post match result"}
+        </Button>
         <Separator className="my-2" />
         {/* Danger */}
         {!isFinished && (

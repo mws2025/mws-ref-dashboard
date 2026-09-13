@@ -157,7 +157,8 @@ player_id, osu_id, name, discord_id, status
 `referee` is used for the dashboard "Your matches" list. Multiple refs may be separated with commas, semicolons, or
 pipes. Portal sign-up only claims an empty cell and never replaces another referee. A referee may withdraw only their
 own assignment. Any authenticated referee can still open an unfinished match for emergency coverage without changing
-the assignment.
+the assignment. When an admin creates a lobby assigned to another referee, the admin automatically takes over the
+Sheet assignment. Admins can also reopen terminal matches from the latest/current-round schedule to repost results.
 
 Match statuses are normalized to:
 
@@ -274,8 +275,8 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `POST` | `/api/match/:matchId/detect-result` | Resolves an exact Bancho score pair to per-player score, accuracy, and HD use from osu! match history. |
 | `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
 | `POST` | `/api/match/:matchId/reset` | Resets the full match state while preserving the connected lobby. |
-| `POST` | `/api/match/:matchId/post-result` | Completes the match and posts the result webhook. |
-| `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1`. |
+| `POST` | `/api/match/:matchId/post-result` | Completes and posts a normal result; admins may repost terminal results without changing a forfeit's status. |
+| `POST` | `/api/match/:matchId/forfeit` | Completes the match as a forfeit with loser score `-1` and posts the minimal forfeit result. |
 
 Live accuracy detection uses the identifiers already loaded for the open match and does not read Sheets again:
 
@@ -354,7 +355,7 @@ old rows cannot activate again. Loading the recipe route also adds missing lifec
 | --- | --- | --- |
 | `POST` | `/api/irc/send` | Sends one `{ channel, message }` payload through the IRC relay. |
 | `GET` | `/api/irc/stream?channel=` | Proxies the relay's server-sent event stream. |
-| `POST` | `/api/match/:matchId/create-lobby` | Creates a lobby, adds assigned/current referees, writes its URL, and returns setup commands. |
+| `POST` | `/api/match/:matchId/create-lobby` | Creates a lobby, performs admin assignment takeover when applicable, adds refs, writes its URL, and returns setup commands. |
 | `POST` | `/api/match/:matchId/join-lobby` | Attaches and probes an existing multiplayer lobby. |
 | `POST` | `/api/match/:matchId/close-lobby` | Closes the lobby and uploads its chat log when configured. |
 
@@ -514,9 +515,11 @@ Other mutation bodies:
 | `POST /api/match/:matchId/post-result` | `{ "playerA": "...", "playerB": "...", "scoreA": 5, "scoreB": 3, "winner": "..." }` |
 | `POST /api/match/:matchId/forfeit` | `{ "winner": "...", "playerA": "...", "playerB": "..." }` |
 
-The result webhook includes the final score and canonical osu! community match URL, bans grouped by side, both home
-mods, the chronological pick/winner rundown, an always-present recipes-used section, Caramel draw details, and the
-osu! API-derived duration when available.
+Normal result webhook titles omit the tournament abbreviation. Their body includes the final score and canonical osu!
+community match URL, bans grouped by side, both home mods, the chronological pick/winner rundown, an always-present
+recipes-used section, Caramel draw details, and the osu! API-derived duration when available. Forfeit results include
+only the round/match title, final score, and the default-winner message; they omit the MP link, lobby rundown, recipes,
+and duration.
 
 Test mode suppresses live IRC and lobby transport where marked in the implementation. Its Integration tab reads actual
 osu! MP history, while Sheet-backed match, inventory, score, recipe, cursor, and result writes remain authoritative.
