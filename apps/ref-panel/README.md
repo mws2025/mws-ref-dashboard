@@ -393,8 +393,9 @@ any SSE event whose embedded channel does not exactly match its mounted lobby.
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
 `manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
-portal. Recipes are crafted during `craft` before a map is selected. RO32 uses two base bans total (one per player);
-later rounds use four base bans total. Beignets can grant its explicit extra ban up to the four-ban absolute ceiling.
+portal. Recipes are crafted during `craft` before a map is selected. RO32 and RO16 use two base bans total (one per
+player); Quarterfinals and later use four base bans total (two per player). Beignets can grant its explicit extra ban
+up to the four-ban absolute ceiling.
 After the base bans, both players choose home mods before crafting and picking. After the pick, call
 `POST /api/match/:matchId/setup-map` with `{ "slot": "NM1" }`. Completed slots may be picked again; each replay is
 stored as another `match_maps` row. TB is rejected until both players are one point from victory. Use `action: "unpick"`

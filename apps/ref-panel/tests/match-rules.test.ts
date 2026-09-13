@@ -135,11 +135,14 @@ describe("match progression", () => {
     expect(isBanLimitReached(5)).toBe(true)
   })
 
-  test("limits RO32 to one base ban per player", () => {
+  test("limits RO32 and RO16 to one base ban per player", () => {
     expect(baseBanLimitForRound("RO32")).toBe(2)
     expect(baseBanLimitForRound("Round of 32")).toBe(2)
-    expect(baseBanLimitForRound("RO16")).toBe(4)
+    expect(baseBanLimitForRound("RO16")).toBe(2)
+    expect(baseBanLimitForRound("Round of 16")).toBe(2)
+    expect(baseBanLimitForRound("Quarterfinals")).toBe(4)
     expect(isBanLimitReached(2, baseBanLimitForRound("RO32"))).toBe(true)
+    expect(isBanLimitReached(2, baseBanLimitForRound("RO16"))).toBe(true)
   })
 
   test("normalizes HD scores and identifies the PS3 miss-count map", () => {
