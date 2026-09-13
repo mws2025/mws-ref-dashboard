@@ -8,11 +8,11 @@ import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import {
   baseBanLimitForRound,
+  effectiveBanLimitForRound,
   formatLobbyTitle,
   isBanLimitReached,
   isTiebreakerReady,
   lobbyModsForPool,
-  MAX_MATCH_BANS,
   parseFinishedScoreAnnouncement,
   parseRollAnnouncement,
 } from "@/lib/match-rules"
@@ -786,7 +786,14 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false }: 
   const tiebreakerReady = isTiebreakerReady(liveScoreA, liveScoreB, match.bestOf ?? 9)
   const activeBanCount = liveMappool?.filter((map) => map.status === "banned").length ?? 0
   const baseBanLimit = baseBanLimitForRound(match.round)
-  const banLimitReached = isBanLimitReached(activeBanCount, manualMapActions ? baseBanLimit : MAX_MATCH_BANS)
+  const hasActiveExtraBan = recipeEvents.some((event) =>
+    event.status === "active" && RECIPES.find((recipe) => recipe.id === event.recipeId)?.effectType === "extra_ban"
+  )
+  const effectiveBanLimit = effectiveBanLimitForRound(
+    match.round,
+    !manualMapActions && hasActiveExtraBan,
+  )
+  const banLimitReached = isBanLimitReached(activeBanCount, effectiveBanLimit)
   const activeSlot = flowState?.currentSlot
   const activeMap = activeSlot
     ? liveMappool?.find((map) => map.slot.toLowerCase() === activeSlot.toLowerCase())

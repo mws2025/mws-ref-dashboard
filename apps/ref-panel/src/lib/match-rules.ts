@@ -52,6 +52,10 @@ export function baseBanLimitForRound(round: string): number {
     : MAX_MATCH_BANS
 }
 
+export function effectiveBanLimitForRound(round: string, hasExtraBan = false): number {
+  return Math.min(MAX_MATCH_BANS, baseBanLimitForRound(round) + (hasExtraBan ? 1 : 0))
+}
+
 export function isBanLimitReached(currentBans: number, limit = MAX_MATCH_BANS): boolean {
   return currentBans >= limit
 }

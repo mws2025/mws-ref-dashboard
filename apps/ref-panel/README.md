@@ -293,6 +293,12 @@ Live accuracy detection uses the identifiers already loaded for the open match a
 `detect-result` returns `{ "pending": true }` until that exact completed game appears, then returns both raw scores,
 0-100 accuracy values, and per-player HD use.
 
+State reads reconcile stale persisted transitions. A match left in `ban` after its round's required ban count advances
+to home-mod selection unless an active Beignets extra ban is pending. A match left on a current slot that is already
+completed repairs its aggregate score from `match_maps`, clears the stale slot, and advances to the next pick or final
+result. Re-submitting an already-completed current map performs the same idempotent repair without awarding ingredients
+or resolving recipes twice.
+
 ### Test-Mode osu! Integration Routes
 
 These authenticated routes return `409` unless the connected Sheet has `test mode = TRUE`.

@@ -8,6 +8,7 @@ import {
   caramelWinCondition,
   canClaimRefereeAssignment,
   compareMapResults,
+  effectiveBanLimitForRound,
   formatMatchResultSections,
   formatLobbyMods,
   formatLobbyTitle,
@@ -1459,6 +1460,79 @@ function opponentOf(player: string, playerA: string, playerB: string): string {
   return player.trim().toLowerCase() === playerA.trim().toLowerCase() ? playerB : playerA
 }
 
+function flowAfterRequiredBans(state: MatchFlowState, match: ApiMatch): MatchFlowState {
+  const preferred = state.firstPicker ?? match.playerA
+  const other = opponentOf(preferred, match.playerA, match.playerB)
+  const hasHomeMod = (player: string): boolean => samePlayer(player, match.playerA)
+    ? Boolean(state.homeModA)
+    : Boolean(state.homeModB)
+  const nextHomeModPlayer = !hasHomeMod(preferred)
+    ? preferred
+    : !hasHomeMod(other) ? other : undefined
+  return {
+    ...state,
+    phase: nextHomeModPlayer ? "home_mod" : "craft",
+    turnPlayer: nextHomeModPlayer ?? state.firstPicker ?? preferred,
+    currentSlot: undefined,
+  }
+}
+
+async function reconcilePersistedMatchFlow(
+  env: Bindings,
+  match: ApiMatch,
+  state: MatchFlowState,
+): Promise<MatchFlowState> {
+  if (state.phase !== "ban" && !state.currentSlot) return state
+  const updatedAt = Date.parse(state.updatedAt ?? "")
+  if (Number.isFinite(updatedAt) && Date.now() - updatedAt < 5_000) return state
+
+  const matchMapValues = await getSheetValuesSafe(env, "match_maps!A1:Z")
+  const matchMapRecords = sheetRowsToRecords(matchMapValues)
+  if (state.phase === "ban") {
+    const activeBanCount = countActiveBans(matchMapRecords, match.id)
+    if (activeBanCount >= baseBanLimitForRound(match.round)) {
+      const [events, items] = await Promise.all([
+        getRecipeEvents(env, match.id),
+        getItemRecords(env),
+      ])
+      const hasPendingExtraBan = events.some((event) =>
+        event.status === "active" && effectTypeForEvent(items, event) === "extra_ban"
+      )
+      if (!hasPendingExtraBan) {
+        return writeMatchFlowState(env, flowAfterRequiredBans(state, match))
+      }
+    }
+  }
+
+  if ((state.phase === "play" || state.phase === "craft") && state.currentSlot) {
+    const latestMap = latestMatchMapRecords(matchMapRecords, match.id).get(state.currentSlot.toLowerCase())
+    if (firstValue(latestMap ?? {}, ["status"]).toLowerCase() === "completed") {
+      const countedA = countCompletedWins(matchMapRecords, match.id, match.playerA)
+      const countedB = countCompletedWins(matchMapRecords, match.id, match.playerB)
+      const scoreA = state.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedA)
+      const scoreB = state.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedB)
+      const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
+      const matchOver = scoreA >= winsNeeded || scoreB >= winsNeeded
+      const pickedBy = firstValue(latestMap ?? {}, ["picked_by"])
+      const nextPicker = nextPlayerAfterPick(pickedBy, match.playerA, match.playerB)
+        ?? state.firstPicker
+        ?? match.playerA
+      if (match.scoreA !== scoreA || match.scoreB !== scoreB) {
+        await updateMatchFields(env, match.id, { score_a: String(scoreA), score_b: String(scoreB) })
+      }
+      return writeMatchFlowState(env, {
+        ...state,
+        phase: matchOver ? "ready_result" : "craft",
+        turnPlayer: matchOver ? undefined : nextPicker,
+        currentSlot: undefined,
+        scoreOverridden: true,
+      })
+    }
+  }
+
+  return state
+}
+
 function defaultFlowState(matchId: string, hasLobby: boolean): MatchFlowState {
   return {
     matchId,
@@ -2658,7 +2732,9 @@ app.get("/api/match/:matchId/state", async (c) => {
 
   try {
     const match = await getMatchById(c.env, matchId)
-    const state = await getMatchFlowState(c.env, matchId, Boolean(match?.lobbyUrl))
+    if (!match) return c.json({ error: "Match not found" }, 404)
+    const persistedState = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const state = await reconcilePersistedMatchFlow(c.env, match, persistedState)
     return c.json({ state })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Failed to load match state" }, 500)
@@ -2879,7 +2955,8 @@ app.post("/api/match/:matchId/state", async (c) => {
   try {
     const match = await getMatchById(c.env, matchId)
     if (!match) return c.json({ error: "Match not found" }, 404)
-    const state = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const persistedState = await getMatchFlowState(c.env, matchId, Boolean(match.lobbyUrl))
+    const state = await reconcilePersistedMatchFlow(c.env, match, persistedState)
     let nextState: MatchFlowState = state
 
     if (action === "record_rolls") {
@@ -3251,6 +3328,31 @@ app.post("/api/match/:matchId/score", async (c) => {
         scoreA: state.scoreOverridden ? match.scoreA ?? 0 : Math.max(match.scoreA ?? 0, countedA),
         scoreB: state.scoreOverridden ? match.scoreB ?? 0 : Math.max(match.scoreB ?? 0, countedB),
       }
+      let recoveredState = state
+      if (
+        (state.phase === "play" || state.phase === "craft") &&
+        samePlayer(state.currentSlot, slot)
+      ) {
+        const winsNeeded = Math.ceil((match.bestOf ?? 5) / 2)
+        const matchOver = totals.scoreA >= winsNeeded || totals.scoreB >= winsNeeded
+        const pickedBy = beforeRow?.[pickedByIdx]?.trim() ?? ""
+        const nextPicker = nextPlayerAfterPick(pickedBy, playerA, playerB)
+          ?? state.firstPicker
+          ?? playerA
+        if (match.scoreA !== totals.scoreA || match.scoreB !== totals.scoreB) {
+          await updateMatchFields(c.env, matchId, {
+            score_a: String(totals.scoreA),
+            score_b: String(totals.scoreB),
+          })
+        }
+        recoveredState = await writeMatchFlowState(c.env, {
+          ...state,
+          phase: matchOver ? "ready_result" : "craft",
+          turnPlayer: matchOver ? undefined : nextPicker,
+          currentSlot: undefined,
+          scoreOverridden: true,
+        })
+      }
       return c.json({
         ok: true,
         alreadyCompleted: true,
@@ -3264,8 +3366,8 @@ app.post("/api/match/:matchId/score", async (c) => {
           a: parseInventoryRecord(inventoryRecords.find((record) => firstValue(record, ["match_id"]) === matchId && samePlayer(firstValue(record, ["player", "player_id"]), playerA))),
           b: parseInventoryRecord(inventoryRecords.find((record) => firstValue(record, ["match_id"]) === matchId && samePlayer(firstValue(record, ["player", "player_id"]), playerB))),
         },
-        state,
-        nextPicker: state.phase === "craft" ? state.turnPlayer : undefined,
+        state: recoveredState,
+        nextPicker: recoveredState.phase === "craft" ? recoveredState.turnPlayer : undefined,
         restoreCommands: [],
       })
     }
@@ -5163,7 +5265,19 @@ app.post("/api/match/:matchId/action", async (c) => {
       return c.json({ error: `${slot} is protected and cannot be banned` }, 409)
     }
     const baseBanLimit = baseBanLimitForRound(match.round)
-    const actionBanLimit = manualOrder ? baseBanLimit : MAX_MATCH_BANS
+    let activeExtraBan: RecipeEventRecord | undefined
+    if (!manualOrder && action === "ban") {
+      const [recipeEvents, recipeItems] = await Promise.all([
+        getRecipeEvents(c.env, matchId),
+        getItemRecords(c.env),
+      ])
+      activeExtraBan = recipeEvents.find((event) =>
+        event.status === "active" &&
+        samePlayer(event.player, actionPlayer) &&
+        effectTypeForEvent(recipeItems, event) === "extra_ban"
+      )
+    }
+    const actionBanLimit = effectiveBanLimitForRound(match.round, Boolean(activeExtraBan))
     if (action === "ban" && isBanLimitReached(activeBanCount, actionBanLimit)) {
       return c.json({ error: `${match.round || "This round"} allows ${baseBanLimit / 2} base ban(s) per player` }, 409)
     }
@@ -5285,15 +5399,7 @@ app.post("/api/match/:matchId/action", async (c) => {
 
     let nextFlowState: MatchFlowState | undefined
     if (!manualOrder && flowState && action === "ban") {
-      const [recipeEvents, recipeItems] = await Promise.all([
-        getRecipeEvents(c.env, matchId),
-        getItemRecords(c.env),
-      ])
-      const extraBan = recipeEvents.find((event) =>
-        event.status === "active" &&
-        samePlayer(event.player, actionPlayer) &&
-        effectTypeForEvent(recipeItems, event) === "extra_ban"
-      )
+      const extraBan = activeExtraBan
       if (extraBan) {
         const now = new Date().toISOString()
         await updateRecipeEvent(c.env, extraBan.id, {

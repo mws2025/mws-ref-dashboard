@@ -3,6 +3,7 @@ import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
   baseBanLimitForRound,
+  effectiveBanLimitForRound,
   caramelLobbyMods,
   caramelWinCondition,
   canClaimRefereeAssignment,
@@ -141,6 +142,9 @@ describe("match progression", () => {
     expect(baseBanLimitForRound("RO16")).toBe(2)
     expect(baseBanLimitForRound("Round of 16")).toBe(2)
     expect(baseBanLimitForRound("Quarterfinals")).toBe(4)
+    expect(effectiveBanLimitForRound("RO16")).toBe(2)
+    expect(effectiveBanLimitForRound("RO16", true)).toBe(3)
+    expect(effectiveBanLimitForRound("Quarterfinals", true)).toBe(4)
     expect(isBanLimitReached(2, baseBanLimitForRound("RO32"))).toBe(true)
     expect(isBanLimitReached(2, baseBanLimitForRound("RO16"))).toBe(true)
   })
