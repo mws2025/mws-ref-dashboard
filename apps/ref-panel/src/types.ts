@@ -6,6 +6,7 @@ export type Inventory = Record<IngKey, number>
 export type RecipeEventStatus = "active" | "resolved" | "reverted"
 export type RecipeInputKind = "mod" | "mods_both" | "protect_map" | "unban_map" | "ingredient"
 export type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
+export type MapWinCondition = "score" | "accuracy" | "miss" | "combo"
 export type MatchFlowPhase =
   | "lobby"
   | "roll"
@@ -22,7 +23,7 @@ export interface PoolMap {
   pool: Pool
   map: string
   beatmapId?: string
-  winCondition?: "score" | "accuracy"
+  winCondition?: MapWinCondition
   optionalMods?: string[]
   bpm: number
   ar: number
@@ -56,6 +57,8 @@ export interface ScoreSubmissionDetails {
   usesHdB: boolean
   missCountA?: number
   missCountB?: number
+  comboA?: number
+  comboB?: number
   rewardIngredients?: [IngKey, IngKey]
 }
 
@@ -96,7 +99,7 @@ export interface TestExpectedSetup {
   playerAMods: string[]
   playerBMods: string[]
   scoringType: string
-  winCondition: "score" | "accuracy"
+  winCondition: MapWinCondition
 }
 
 export interface TestMpBinding {
@@ -159,6 +162,9 @@ export interface TestMpResult {
     missCountA: number | null
     missCountB: number | null
     missCountMode: boolean
+    comboA: number | null
+    comboB: number | null
+    comboMode: boolean
   }
 }
 

@@ -20,6 +20,7 @@ import type {
   HomeMod,
   IngKey,
   Inventory,
+  MapWinCondition,
   Match,
   MatchFlowState,
   PoolMap,
@@ -45,7 +46,7 @@ interface RecipePickSetup {
   notices: string[]
   beatmapId?: string
   mapTitle?: string
-  winCondition: "score" | "accuracy"
+  winCondition: MapWinCondition
 }
 
 interface ScoreSubmitOutcome {
@@ -193,6 +194,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     b?: number
     rawA?: number
     rawB?: number
+    missCountA?: number
+    missCountB?: number
+    comboA?: number
+    comboB?: number
   }>({ slot: "", run: 0 })
   const [lobbyNameMismatch, setLobbyNameMismatch] = useState<{ found: string; expected: string } | null>(null)
   const dragState = useRef<{ startX: number; startW: number } | null>(null)
@@ -802,9 +807,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
   const activeMap = activeSlot
     ? liveMappool?.find((map) => map.slot.toLowerCase() === activeSlot.toLowerCase())
     : undefined
-  const accuracyMode = Boolean(activeSlot && (
-    activeMap?.winCondition === "accuracy" ||
-    recipeEvents.some((event) =>
+  const recipeAccuracyMode = Boolean(activeSlot && recipeEvents.some((event) =>
       event.status === "active" &&
       event.target?.toLowerCase() === activeSlot.toLowerCase() &&
       (
@@ -812,15 +815,17 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
         event.payload.copiedEffectType === "accuracy_mode" ||
         event.payload.wildcardWinCondition === "accuracy"
       )
-    )
-  ))
-  const accuracyLookupKeyRef = useRef("")
+    ))
+  const activeWinCondition: MapWinCondition = recipeAccuracyMode
+    ? "accuracy"
+    : activeMap?.winCondition ?? "score"
+  const resultLookupKeyRef = useRef("")
   useEffect(() => {
     const beatmapId = Number(activeMap?.beatmapId)
     const playerAOsuId = Number(match.playerAOsuId)
     const playerBOsuId = Number(match.playerBOsuId)
     if (
-      !accuracyMode || !activeSlot || !liveLobbyUrl ||
+      activeWinCondition === "score" || !activeSlot || !liveLobbyUrl ||
       !Number.isSafeInteger(beatmapId) || beatmapId <= 0 ||
       !Number.isSafeInteger(playerAOsuId) || playerAOsuId <= 0 ||
       !Number.isSafeInteger(playerBOsuId) || playerBOsuId <= 0 ||
@@ -829,8 +834,8 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     ) return
 
     const lookupKey = `${activeSlot}:${detectedScores.run}:${detectedScores.rawA}:${detectedScores.rawB}`
-    if (accuracyLookupKeyRef.current === lookupKey) return
-    accuracyLookupKeyRef.current = lookupKey
+    if (resultLookupKeyRef.current === lookupKey) return
+    resultLookupKeyRef.current = lookupKey
     let cancelled = false
 
     const detect = async () => {
@@ -852,11 +857,27 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
         if (!response.ok) break
         const data = await response.json() as {
           pending?: boolean
-          result?: { accuracyA: number; accuracyB: number }
+          result?: {
+            accuracyA: number | null
+            accuracyB: number | null
+            missCountA: number | null
+            missCountB: number | null
+            comboA: number | null
+            comboB: number | null
+          }
         }
         if (data.result && !cancelled) {
           setDetectedScores((current) => current.slot === activeSlot
-            ? { ...current, a: data.result?.accuracyA, b: data.result?.accuracyB }
+            ? {
+                ...current,
+                ...(activeWinCondition === "accuracy"
+                  ? { a: data.result?.accuracyA ?? undefined, b: data.result?.accuracyB ?? undefined }
+                  : {}),
+                missCountA: data.result?.missCountA ?? undefined,
+                missCountB: data.result?.missCountB ?? undefined,
+                comboA: data.result?.comboA ?? undefined,
+                comboB: data.result?.comboB ?? undefined,
+              }
             : current)
           return
         }
@@ -866,7 +887,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     void detect()
     return () => { cancelled = true }
   }, [
-    accuracyMode,
+    activeWinCondition,
     activeMap?.beatmapId,
     activeSlot,
     detectedScores.rawA,
@@ -1105,7 +1126,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
                 setupSubmitting={setupSubmitting}
                 scoreSubmitting={scoreSubmitting}
                 detectedScores={detectedScores.slot === flowState?.currentSlot ? detectedScores : undefined}
-                accuracyMode={accuracyMode}
+                winCondition={activeWinCondition}
                 wildcardRewardRequired={wildcardRewardRequired}
                 onSubmitScore={submitScore}
               />

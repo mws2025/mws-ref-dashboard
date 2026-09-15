@@ -5,7 +5,6 @@ import {
   baseBanLimitForRound,
   effectiveBanLimitForRound,
   caramelLobbyMods,
-  caramelWinCondition,
   canClaimRefereeAssignment,
   compareMapResults,
   formatMatchResultSections,
@@ -20,7 +19,6 @@ import {
   isBanLimitReached,
   isValidScheduleDate,
   isTiebreakerReady,
-  isMissCountWinCondition,
   latestRoundScheduleMatches,
   mapResultFromScoreReport,
   lobbyInviteTarget,
@@ -28,6 +26,7 @@ import {
   nextPlayerAfterPick,
   normalizeHdScore,
   parseMappoolMods,
+  parseMapWinCondition,
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
@@ -80,12 +79,15 @@ describe("lobby mods", () => {
     expect(caramelLobbyMods("unsupported", true)).toBeNull()
   })
 
-  test("defaults blank Caramel win conditions to score and validates accuracy", () => {
-    expect(caramelWinCondition("")).toBe("score")
-    expect(caramelWinCondition("scorev2")).toBe("score")
-    expect(caramelWinCondition("acc")).toBe("accuracy")
-    expect(caramelWinCondition("accuracy")).toBe("accuracy")
-    expect(caramelWinCondition("combo")).toBeNull()
+  test("parses every sheet win condition and defaults blank to ScoreV2", () => {
+    expect(parseMapWinCondition("")).toBe("score")
+    expect(parseMapWinCondition("v2")).toBe("score")
+    expect(parseMapWinCondition("scorev2")).toBe("score")
+    expect(parseMapWinCondition("acc")).toBe("accuracy")
+    expect(parseMapWinCondition("accuracy")).toBe("accuracy")
+    expect(parseMapWinCondition("miss")).toBe("miss")
+    expect(parseMapWinCondition("combo")).toBe("combo")
+    expect(parseMapWinCondition("unsupported")).toBeNull()
   })
 
   test("parses optional mappool mods without enforcing an acronym list", () => {
@@ -152,15 +154,24 @@ describe("match progression", () => {
     expect(isBanLimitReached(2, baseBanLimitForRound("RO16"))).toBe(true)
   })
 
-  test("normalizes HD scores and identifies the PS3 miss-count map", () => {
+  test("normalizes HD scores and compares explicit sheet win conditions", () => {
     expect(normalizeHdScore(1_060_000, true)).toBe(1_000_000)
     expect(normalizeHdScore(1_060_000, false)).toBe(1_060_000)
-    expect(isMissCountWinCondition("ps3")).toBe(true)
-    expect(isMissCountWinCondition("PS2")).toBe(false)
-    expect(compareMapResults("PS3", 800_000, 900_000, 0, 1)).toBe(1)
-    expect(compareMapResults("PS3", 900_000, 800_000, 2, 1)).toBe(-1)
-    expect(compareMapResults("PS3", 900_000, 800_000, 1, 1)).toBe(0)
-    expect(compareMapResults("PS3", 900_000, 800_000)).toBeNull()
+    expect(compareMapResults("score", { scoreA: 800_000, scoreB: 900_000 })).toBe(-1)
+    expect(compareMapResults("miss", { scoreA: 800_000, scoreB: 900_000, missCountA: 0, missCountB: 1 })).toBe(1)
+    expect(compareMapResults("miss", { scoreA: 900_000, scoreB: 800_000, missCountA: 2, missCountB: 1 })).toBe(-1)
+    expect(compareMapResults("miss", { scoreA: 900_000, scoreB: 800_000, missCountA: 1, missCountB: 1 })).toBe(0)
+    expect(compareMapResults("miss", { scoreA: 900_000, scoreB: 800_000 })).toBeNull()
+    expect(compareMapResults("combo", { scoreA: 800_000, scoreB: 900_000, comboA: 500, comboB: 400 })).toBe(1)
+    expect(compareMapResults("combo", { scoreA: 900_000, scoreB: 800_000, comboA: 400, comboB: 500 })).toBe(-1)
+    const emptyPs3Condition = parseMapWinCondition("")
+    expect(emptyPs3Condition).toBe("score")
+    expect(compareMapResults(emptyPs3Condition ?? "score", {
+      scoreA: 900_000,
+      scoreB: 800_000,
+      missCountA: 5,
+      missCountB: 0,
+    })).toBe(1)
   })
 
   test("detects HD from the matching finished osu score report", () => {
@@ -169,8 +180,8 @@ describe("match progression", () => {
         beatmapId: 5854733,
         endedAt: "2026-08-30T10:00:00Z",
         scores: [
-          { userId: 8250297, score: 399617, accuracy: 0.98765, mods: ["NF", "HR"] },
-          { userId: 1501956, score: 417450, accuracy: 98.12345, mods: ["NF", "HD", "HR"] },
+          { userId: 8250297, score: 399617, accuracy: 0.98765, misses: 1, maxCombo: 843, mods: ["NF", "HR"] },
+          { userId: 1501956, score: 417450, accuracy: 98.12345, misses: 2, maxCombo: 721, mods: ["NF", "HD", "HR"] },
         ],
       },
     ]
@@ -184,8 +195,24 @@ describe("match progression", () => {
       scoreB: 417450,
       accuracyA: 98.765,
       accuracyB: 98.1235,
+      missCountA: 1,
+      missCountB: 2,
+      comboA: 843,
+      comboB: 721,
       usesHdA: false,
       usesHdB: true,
+    })
+    const missingMetricsGames = [{
+      ...games[0],
+      scores: games[0].scores.map(({ userId, score, mods }) => ({ userId, score, mods })),
+    }]
+    expect(mapResultFromScoreReport(missingMetricsGames, 5854733, 8250297, 1501956, 399617, 417450)).toMatchObject({
+      accuracyA: null,
+      accuracyB: null,
+      missCountA: null,
+      missCountB: null,
+      comboA: null,
+      comboB: null,
     })
     expect(hdUsageFromScoreReport(games, 5854733, 8250297, 1501956, 1, 2)).toBeNull()
   })

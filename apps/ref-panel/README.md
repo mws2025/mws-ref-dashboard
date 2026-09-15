@@ -272,7 +272,7 @@ array of all active recipes. It returns `Access-Control-Allow-Origin: *` and a t
 | `POST` | `/api/match/:matchId/match-score` | Stores an absolute manual match-star correction in `matches`. |
 | `POST` | `/api/match/:matchId/action` | Applies `pick`, `ban`, `protect`, or corrective `unpick`. |
 | `POST` | `/api/match/:matchId/setup-map` | Binds both players' active recipes to the picked map and returns lobby setup commands. |
-| `POST` | `/api/match/:matchId/detect-result` | Resolves an exact Bancho score pair to per-player score, accuracy, and HD use from osu! match history. |
+| `POST` | `/api/match/:matchId/detect-result` | Resolves an exact Bancho score pair to score, accuracy, misses, max combo, and HD use from osu! match history. |
 | `POST` | `/api/match/:matchId/score` | Resolves recipe-adjusted scores, rewards, replay state, and next flow state. |
 | `POST` | `/api/match/:matchId/reset` | Resets the full match state while preserving the connected lobby. |
 | `POST` | `/api/match/:matchId/post-result` | Completes and posts a normal result; admins may repost terminal results without changing a forfeit's status. |
@@ -424,6 +424,8 @@ Map setup preserves the pool's required mods. FM/TB remain Freemod.
   "usesHdB": false,
   "missCountA": 0,
   "missCountB": 1,
+  "comboA": 843,
+  "comboB": 721,
   "rewardIngredients": ["egg", "milk"]
 }
 ```
@@ -431,9 +433,10 @@ Map setup preserves the pool's required mods. FM/TB remain Freemod.
 Scores accept numbers, comma separators, and an optional trailing `%`. Crepe accuracy values are limited to 0-100.
 For score win conditions, a side marked `usesHdA`/`usesHdB` is normalized with `round(rawScore / 1.06)` before recipe
 score additions/multipliers and winner calculation. The portal exposes manual HD toggles; the integration test obtains
-the flags from each osu! score's mods automatically. `PS3` uses lower miss count, requires both nonnegative whole-number
-miss counts, and requests a replay when the miss counts tie. The integration route reads `statistics.count_miss` from
-osu!; manual score entry shows dedicated miss-count inputs. When the active map was drawn by Caramel,
+the flags from each osu! score's mods automatically. Maps configured with `miss` use lower miss count; maps configured
+with `combo` use higher max combo. Both require nonnegative whole-number values and request a replay on a metric tie.
+The integration route reads `statistics.count_miss` and `max_combo` from osu!; manual score entry exposes the matching
+metric inputs. When the active map was drawn by Caramel,
 `rewardIngredients` is required and must contain exactly two valid ingredients. They are awarded to the computed map
 winner as part of the same score settlement.
 Replay recipes return `replayRequired: true` on the first run, and any tied result also requests another replay. Submit
@@ -471,9 +474,9 @@ full cost and reverts that event before Caramel is charged. Only one Caramel can
 validated `caramel_maps` rows across MTT 2024 and MWS 2025, choosing randomly among the globally least-used maps to
 avoid repeats across matches until the list cycles. It creates a dedicated `WC` match-map entry and immediately sets
 the drawn beatmap for play without using or requiring a TB slot. It persists the source slot/stage/year, mods, and win
-condition in its event payload and announces the draw, applied mod, and win condition in lobby chat. Blank
-`win_con` uses ScoreV2 score; `acc`
-uses the better accuracy to determine the map winner while the osu! lobby remains on ScoreV2. Blank `mod` applies no
+condition in its event payload and announces the draw, applied mod, and win condition in lobby chat. Blank or `v2`
+`win_con` uses ScoreV2 score; `acc`, `miss`, and `combo` compare accuracy, lower miss count, and higher max combo
+respectively while the osu! lobby remains on ScoreV2. Blank `mod` applies no
 forced mod, so a source HR/DT map is played as NM unless its `mod` column explicitly says otherwise. The explicit
 `double_time`, `hard_rock`, `easy`, `easy-double_time`, and `autopilot` values map to Bancho mod acronyms.
 Magic Cake copies the opponent's latest `resolved` recipe, not
@@ -488,16 +491,15 @@ player IDs, and raw scores. HD usage from osu! match history is authoritative an
 before winner comparison. The referee HD toggles remain the fallback when match history is unavailable or has not yet
 published the matching game.
 
-Each `mappool` row may set `win_con` to `acc` or `accuracy`; blank, `score`, and `scorev2` use ScoreV2 score. The
-lobby remains on ScoreV2 for accuracy maps, but winner comparison uses the osu! API's per-player accuracy. After both
-Bancho score announcements arrive, the match panel correlates that exact score pair with the completed osu! game and
-fills both accuracy inputs automatically. It retries briefly for osu! history propagation and leaves manual percentage
-entry available as a fallback.
+Each `mappool` row may set `win_con` to `v2`, `acc`, `miss`, or `combo`; blank also means ScoreV2. The lobby remains on
+ScoreV2 for every one of these conditions. After both Bancho score announcements arrive, the match panel correlates
+that exact score pair with the completed osu! game and fills accuracy, miss-count, or max-combo values automatically.
+It retries briefly for osu! history propagation and leaves manual metric entry available as a fallback. Unsupported
+non-empty values stop mappool loading/setup with an explicit configuration error.
 
 The optional `mods` column is informational about the mods players may choose. Any non-empty value configures
 `!mp mods Freemod` (plus `NF` when enabled); no separate mod-restriction command is sent. A blank value preserves the
-normal pool mod setup. The portal does not validate the listed mod acronyms. Invalid win conditions still stop mappool
-loading/setup with an explicit configuration error.
+normal pool mod setup. The portal does not validate the listed mod acronyms.
 
 Other mutation bodies:
 

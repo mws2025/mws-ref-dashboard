@@ -1,3 +1,7 @@
+import type { MapWinCondition } from "../types"
+
+export type { MapWinCondition } from "../types"
+
 export type RollAnnouncement = {
   player: string
   value: number
@@ -322,8 +326,6 @@ export function lobbyModsForPool(pool: string, enforceNF: boolean): string {
   }
 }
 
-export type CaramelWinCondition = "score" | "accuracy"
-
 export function parseMappoolMods(value: string): string[] {
   return value.trim()
     .split(/[,/|+\s]+/)
@@ -349,10 +351,12 @@ export function caramelLobbyMods(value: string, enforceNF: boolean): string | nu
   return mods ? formatLobbyMods(mods, enforceNF) : null
 }
 
-export function caramelWinCondition(value: string): CaramelWinCondition | null {
+export function parseMapWinCondition(value: string): MapWinCondition | null {
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
-  if (!normalized || normalized === "score" || normalized === "scorev2") return "score"
+  if (!normalized || normalized === "v2" || normalized === "score" || normalized === "scorev2") return "score"
   if (normalized === "acc" || normalized === "accuracy") return "accuracy"
+  if (normalized === "miss" || normalized === "misscount") return "miss"
+  if (normalized === "combo" || normalized === "maxcombo") return "combo"
   return null
 }
 
@@ -394,7 +398,9 @@ export type OsuScoreReportGame = {
   scores: Array<{
     userId: number
     score: number
-    accuracy?: number
+    accuracy?: number | null
+    misses?: number | null
+    maxCombo?: number | null
     mods: readonly string[]
   }>
 }
@@ -402,8 +408,12 @@ export type OsuScoreReportGame = {
 export type DetectedOsuMapResult = {
   scoreA: number
   scoreB: number
-  accuracyA: number
-  accuracyB: number
+  accuracyA: number | null
+  accuracyB: number | null
+  missCountA: number | null
+  missCountB: number | null
+  comboA: number | null
+  comboB: number | null
   usesHdA: boolean
   usesHdB: boolean
 }
@@ -422,13 +432,18 @@ export function mapResultFromScoreReport(
     const playerA = candidate.scores.find((score) => score.userId === playerAOsuId)
     const playerB = candidate.scores.find((score) => score.userId === playerBOsuId)
     if (playerA?.score !== scoreA || playerB?.score !== scoreB) continue
-    if (!Number.isFinite(playerA.accuracy) || !Number.isFinite(playerB.accuracy)) return null
-    const percentage = (accuracy: number): number => Number((accuracy <= 1 ? accuracy * 100 : accuracy).toFixed(4))
+    const percentage = (accuracy: number | null | undefined): number | null => Number.isFinite(accuracy)
+      ? Number(((accuracy ?? 0) <= 1 ? (accuracy ?? 0) * 100 : (accuracy ?? 0)).toFixed(4))
+      : null
     return {
       scoreA: playerA.score,
       scoreB: playerB.score,
-      accuracyA: percentage(playerA.accuracy ?? 0),
-      accuracyB: percentage(playerB.accuracy ?? 0),
+      accuracyA: percentage(playerA.accuracy),
+      accuracyB: percentage(playerB.accuracy),
+      missCountA: Number.isFinite(playerA.misses) ? Math.max(0, Math.trunc(playerA.misses ?? 0)) : null,
+      missCountB: Number.isFinite(playerB.misses) ? Math.max(0, Math.trunc(playerB.misses ?? 0)) : null,
+      comboA: Number.isFinite(playerA.maxCombo) ? Math.max(0, Math.trunc(playerA.maxCombo ?? 0)) : null,
+      comboB: Number.isFinite(playerB.maxCombo) ? Math.max(0, Math.trunc(playerB.maxCombo ?? 0)) : null,
       usesHdA: playerA.mods.some((mod) => mod.toUpperCase() === "HD"),
       usesHdB: playerB.mods.some((mod) => mod.toUpperCase() === "HD"),
     }
@@ -458,23 +473,32 @@ export function hdUsageFromScoreReport(
   return null
 }
 
-export function isMissCountWinCondition(slot: string): boolean {
-  return slot.trim().toUpperCase() === "PS3"
-}
-
 export function compareMapResults(
-  slot: string,
-  scoreA: number,
-  scoreB: number,
-  missCountA?: number | null,
-  missCountB?: number | null,
+  winCondition: MapWinCondition,
+  result: {
+    scoreA: number
+    scoreB: number
+    missCountA?: number | null
+    missCountB?: number | null
+    comboA?: number | null
+    comboB?: number | null
+  },
 ): number | null {
-  if (!isMissCountWinCondition(slot)) return Math.sign(scoreA - scoreB)
-  if (
-    !Number.isInteger(missCountA) || !Number.isInteger(missCountB) ||
-    (missCountA ?? -1) < 0 || (missCountB ?? -1) < 0
-  ) return null
-  return Math.sign((missCountB ?? 0) - (missCountA ?? 0))
+  if (winCondition === "miss") {
+    if (
+      !Number.isInteger(result.missCountA) || !Number.isInteger(result.missCountB) ||
+      (result.missCountA ?? -1) < 0 || (result.missCountB ?? -1) < 0
+    ) return null
+    return Math.sign((result.missCountB ?? 0) - (result.missCountA ?? 0))
+  }
+  if (winCondition === "combo") {
+    if (
+      !Number.isInteger(result.comboA) || !Number.isInteger(result.comboB) ||
+      (result.comboA ?? -1) < 0 || (result.comboB ?? -1) < 0
+    ) return null
+    return Math.sign((result.comboA ?? 0) - (result.comboB ?? 0))
+  }
+  return Math.sign(result.scoreA - result.scoreB)
 }
 
 export function formatLobbyTitle(abbreviation: string, playerA: string, playerB: string): string {

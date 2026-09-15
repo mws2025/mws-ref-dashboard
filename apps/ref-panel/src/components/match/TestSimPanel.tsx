@@ -184,6 +184,9 @@ export function TestSimPanel({
         ...(result.values?.missCountMode && result.values.missCountA !== null && result.values.missCountB !== null
           ? { missCountA: result.values.missCountA, missCountB: result.values.missCountB }
           : {}),
+        ...(result.values?.comboMode && result.values.comboA !== null && result.values.comboB !== null
+          ? { comboA: result.values.comboA, comboB: result.values.comboB }
+          : {}),
         ...(wildcardRewardRequired && rewardIngredients[0] && rewardIngredients[1]
           ? { rewardIngredients: rewardIngredients as [IngKey, IngKey] }
           : {}),
@@ -311,11 +314,13 @@ export function TestSimPanel({
                     <p className="text-[10px] text-muted-foreground">{playerA}</p>
                     <p className="font-mono">{result.values.scoreA ?? "missing"}{result.values.accuracyMode ? "%" : ""}{result.values.usesHdA ? " HD" : ""}</p>
                     {result.values.missCountMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.missCountA ?? "missing"} misses</p>}
+                    {result.values.comboMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.comboA ?? "missing"} max combo</p>}
                   </div>
                   <div>
                     <p className="text-[10px] text-muted-foreground">{playerB}</p>
                     <p className="font-mono">{result.values.scoreB ?? "missing"}{result.values.accuracyMode ? "%" : ""}{result.values.usesHdB ? " HD" : ""}</p>
                     {result.values.missCountMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.missCountB ?? "missing"} misses</p>}
+                    {result.values.comboMode && <p className="font-mono text-[10px] text-muted-foreground">{result.values.comboB ?? "missing"} max combo</p>}
                   </div>
                 </div>
               )}

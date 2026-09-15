@@ -4,8 +4,8 @@ import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { INGREDIENTS } from "@/data/constants"
-import { isMissCountWinCondition, isValidRoll, parseScoreValue } from "@/lib/match-rules"
-import type { IngKey, MatchFlowState, PoolMap, ScoreSubmissionDetails } from "@/types"
+import { isValidRoll, parseScoreValue } from "@/lib/match-rules"
+import type { IngKey, MapWinCondition, MatchFlowState, PoolMap, ScoreSubmissionDetails } from "@/types"
 
 interface Props {
   state: MatchFlowState | null
@@ -23,8 +23,16 @@ interface Props {
   onSetupMap: (map: PoolMap) => void
   setupSubmitting?: boolean
   scoreSubmitting?: boolean
-  detectedScores?: { a?: number; b?: number; run: number }
-  accuracyMode?: boolean
+  detectedScores?: {
+    a?: number
+    b?: number
+    missCountA?: number
+    missCountB?: number
+    comboA?: number
+    comboB?: number
+    run: number
+  }
+  winCondition?: MapWinCondition
   wildcardRewardRequired?: boolean
   onSubmitScore: (slot: string, scoreA: number, scoreB: number, details: ScoreSubmissionDetails) => void
 }
@@ -64,7 +72,7 @@ export function FlowPanel({
   setupSubmitting = false,
   scoreSubmitting = false,
   detectedScores,
-  accuracyMode = false,
+  winCondition = "score",
   wildcardRewardRequired = false,
   onSubmitScore,
 }: Props) {
@@ -82,6 +90,8 @@ export function FlowPanel({
     usesHdB?: boolean
     missCountA?: string
     missCountB?: string
+    comboA?: string
+    comboB?: string
     rewardA?: IngKey | ""
     rewardB?: IngKey | ""
   }>({ slot: "" })
@@ -108,14 +118,32 @@ export function FlowPanel({
     : detectedScores?.b?.toString() ?? ""
   const parsedScoreA = parseScoreValue(scoreInputA)
   const parsedScoreB = parseScoreValue(scoreInputB)
-  const missCountMode = Boolean(currentMap && isMissCountWinCondition(currentMap.slot))
-  const missCountInputA = scoreEntry.slot === currentSlotKey ? scoreEntry.missCountA ?? "" : ""
-  const missCountInputB = scoreEntry.slot === currentSlotKey ? scoreEntry.missCountB ?? "" : ""
+  const accuracyMode = winCondition === "accuracy"
+  const missCountMode = winCondition === "miss"
+  const comboMode = winCondition === "combo"
+  const missCountInputA = scoreEntry.slot === currentSlotKey && scoreEntry.missCountA !== undefined
+    ? scoreEntry.missCountA
+    : detectedScores?.missCountA?.toString() ?? ""
+  const missCountInputB = scoreEntry.slot === currentSlotKey && scoreEntry.missCountB !== undefined
+    ? scoreEntry.missCountB
+    : detectedScores?.missCountB?.toString() ?? ""
   const parsedMissCountA = parseScoreValue(missCountInputA)
   const parsedMissCountB = parseScoreValue(missCountInputB)
   const validMissCounts = !missCountMode || (
     parsedMissCountA !== null && Number.isInteger(parsedMissCountA) &&
     parsedMissCountB !== null && Number.isInteger(parsedMissCountB)
+  )
+  const comboInputA = scoreEntry.slot === currentSlotKey && scoreEntry.comboA !== undefined
+    ? scoreEntry.comboA
+    : detectedScores?.comboA?.toString() ?? ""
+  const comboInputB = scoreEntry.slot === currentSlotKey && scoreEntry.comboB !== undefined
+    ? scoreEntry.comboB
+    : detectedScores?.comboB?.toString() ?? ""
+  const parsedComboA = parseScoreValue(comboInputA)
+  const parsedComboB = parseScoreValue(comboInputB)
+  const validCombos = !comboMode || (
+    parsedComboA !== null && Number.isInteger(parsedComboA) &&
+    parsedComboB !== null && Number.isInteger(parsedComboB)
   )
   const scoresWithinRange = !accuracyMode || (
     parsedScoreA !== null && parsedScoreB !== null && parsedScoreA <= 100 && parsedScoreB <= 100
@@ -123,7 +151,7 @@ export function FlowPanel({
   const rewardA = scoreEntry.slot === currentSlotKey ? scoreEntry.rewardA ?? "" : ""
   const rewardB = scoreEntry.slot === currentSlotKey ? scoreEntry.rewardB ?? "" : ""
   const validWildcardRewards = !wildcardRewardRequired || (Boolean(rewardA) && Boolean(rewardB))
-  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange && validMissCounts && validWildcardRewards
+  const canSubmitScore = currentMap && parsedScoreA !== null && parsedScoreB !== null && scoresWithinRange && validMissCounts && validCombos && validWildcardRewards
 
   return (
     <div className="space-y-4">
@@ -299,7 +327,7 @@ export function FlowPanel({
           </div>
           {missCountMode && (
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">PS3 uses lower miss count. A tied miss count requires a replay.</p>
+              <p className="text-xs text-muted-foreground">Lower miss count wins. A tied miss count requires a replay.</p>
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1">
                   <span className="text-[10px] text-muted-foreground">{playerA} misses</span>
@@ -322,6 +350,37 @@ export function FlowPanel({
                     inputMode="numeric"
                     value={missCountInputB}
                     onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, missCountB: event.target.value }))}
+                    placeholder="0"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+          {comboMode && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Higher max combo wins. A tied max combo requires a replay.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="space-y-1">
+                  <span className="text-[10px] text-muted-foreground">{playerA} max combo</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={comboInputA}
+                    onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, comboA: event.target.value }))}
+                    placeholder="0"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[10px] text-muted-foreground">{playerB} max combo</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={comboInputB}
+                    onChange={(event) => setScoreEntry((current) => ({ ...current, slot: currentSlotKey, comboB: event.target.value }))}
                     placeholder="0"
                   />
                 </label>
@@ -371,6 +430,9 @@ export function FlowPanel({
                 usesHdB: scoreEntry.slot === currentSlotKey && Boolean(scoreEntry.usesHdB),
                 ...(missCountMode && parsedMissCountA !== null && parsedMissCountB !== null
                   ? { missCountA: parsedMissCountA, missCountB: parsedMissCountB }
+                  : {}),
+                ...(comboMode && parsedComboA !== null && parsedComboB !== null
+                  ? { comboA: parsedComboA, comboB: parsedComboB }
                   : {}),
                 ...(wildcardRewardRequired && rewardA && rewardB
                   ? { rewardIngredients: [rewardA, rewardB] as [IngKey, IngKey] }

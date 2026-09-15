@@ -5,7 +5,6 @@ import { sign, verify } from "hono/jwt"
 import {
   baseBanLimitForRound,
   caramelLobbyMods,
-  caramelWinCondition,
   canClaimRefereeAssignment,
   compareMapResults,
   effectiveBanLimitForRound,
@@ -18,15 +17,16 @@ import {
   hdUsageFromScoreReport,
   homeModIngredientAwards,
   isBanLimitReached,
-  isMissCountWinCondition,
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
   mapResultFromScoreReport,
+  type MapWinCondition,
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
   normalizeHdScore,
   parseMappoolMods,
+  parseMapWinCondition,
   parseScoreValue,
   normalizeScheduleTime,
   parseCreatedLobbyAnnouncement,
@@ -107,7 +107,7 @@ type ApiPoolMap = {
   pool: string
   map: string
   beatmapId?: string
-  winCondition: "score" | "accuracy"
+  winCondition: MapWinCondition
   optionalMods: string[]
   status: string
   pickedBy?: string
@@ -136,7 +136,7 @@ type TestExpectedSetup = {
   playerAMods: string[]
   playerBMods: string[]
   scoringType: string
-  winCondition: "score" | "accuracy"
+  winCondition: MapWinCondition
 }
 
 type TestMpBinding = {
@@ -218,7 +218,7 @@ async function fetchOsu(env: Bindings, path: string, init?: RequestInit): Promis
 }
 
 type OsuMpUser = { id: number; username: string }
-type OsuMpScore = { userId: number; score: number; accuracy: number; misses: number; mods: string[] }
+type OsuMpScore = { userId: number; score: number; accuracy: number | null; misses: number | null; maxCombo: number | null; mods: string[] }
 type OsuMpGame = {
   eventId: number
   id: number
@@ -300,13 +300,17 @@ function parseOsuMpMatch(value: unknown): OsuMpMatch {
       const value = Number(score?.score)
       const accuracy = Number(score?.accuracy)
       const statistics = toRecord(score?.statistics)
-      const misses = Number(statistics?.count_miss ?? statistics?.miss ?? score?.count_miss ?? 0)
+      const missValue = statistics?.count_miss ?? statistics?.miss ?? score?.count_miss
+      const comboValue = score?.max_combo
+      const misses = missValue === undefined || missValue === null ? NaN : Number(missValue)
+      const maxCombo = comboValue === undefined || comboValue === null ? NaN : Number(comboValue)
       return Number.isFinite(userId) && Number.isFinite(value)
         ? [{
             userId,
             score: value,
-            accuracy: Number.isFinite(accuracy) ? accuracy : 0,
-            misses: Number.isFinite(misses) ? Math.max(0, Math.trunc(misses)) : 0,
+            accuracy: Number.isFinite(accuracy) ? accuracy : null,
+            misses: Number.isFinite(misses) ? Math.max(0, Math.trunc(misses)) : null,
+            maxCombo: Number.isFinite(maxCombo) ? Math.max(0, Math.trunc(maxCombo)) : null,
             mods: normalizeOsuMods(score?.mods),
           }]
         : []
@@ -1441,7 +1445,7 @@ function parseTestMpBinding(raw: string): TestMpBinding | undefined {
           playerAMods: normalizeOsuMods(expectedRaw.playerAMods),
           playerBMods: normalizeOsuMods(expectedRaw.playerBMods),
           scoringType: String(expectedRaw.scoringType ?? "score"),
-          winCondition: expectedRaw.winCondition === "accuracy" ? "accuracy" as const : "score" as const,
+          winCondition: parseMapWinCondition(String(expectedRaw.winCondition ?? "")) ?? "score",
         }
       : undefined
     return {
@@ -2016,7 +2020,7 @@ type RecipePickSetup = {
   playerBMods: string[]
   beatmapId?: string
   mapTitle?: string
-  winCondition: "score" | "accuracy"
+  winCondition: MapWinCondition
 }
 
 async function activateRecipesForPick(
@@ -2055,7 +2059,7 @@ async function activateRecipesForPick(
   }
 
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
-  const mapWinCondition = caramelWinCondition(mapWinConditionValue)
+  const mapWinCondition = parseMapWinCondition(mapWinConditionValue)
   if (mapWinCondition === null) throw new Error(`${slot} has invalid win_con: ${mapWinConditionValue}`)
   const usesMapFreemod = mapOptionalModsValue.trim().length > 0
   let mods = usesMapFreemod
@@ -2065,7 +2069,7 @@ async function activateRecipesForPick(
   const notices: string[] = []
   let beatmapId: string | undefined
   let mapTitle: string | undefined
-  let winCondition: "score" | "accuracy" = mapWinCondition
+  let winCondition: MapWinCondition = mapWinCondition
   const extraPlayerMods = new Map<string, Set<string>>([
     [playerA.toLowerCase(), new Set<string>()],
     [playerB.toLowerCase(), new Set<string>()],
@@ -2122,7 +2126,8 @@ async function activateRecipesForPick(
         const wildcardPool = String(payload.wildcardPool ?? "").trim().toUpperCase()
         if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
       }
-      if (payload.wildcardWinCondition === "accuracy") winCondition = "accuracy"
+      const wildcardWinCondition = parseMapWinCondition(String(payload.wildcardWinCondition ?? ""))
+      if (wildcardWinCondition) winCondition = wildcardWinCondition
       if (mapTitle) {
         const year = String(payload.wildcardMappoolYear ?? "Unknown year").trim()
         const sourceSlot = String(payload.wildcardSourceSlot ?? "Unknown pick").trim()
@@ -2131,7 +2136,10 @@ async function activateRecipesForPick(
           : null
         const modLabel = !appliedMods || appliedMods === "None" ? "NM (none)" : appliedMods
         notices.push(`Caramel map: (${year}) - ${sourceSlot} - ${mapTitle}`)
-        notices.push(`Mod applied: ${modLabel} - Win condition: ${winCondition === "accuracy" ? "Accuracy" : "Score"}`)
+        const winConditionLabel = winCondition === "accuracy"
+          ? "Accuracy"
+          : winCondition === "miss" ? "Miss count" : winCondition === "combo" ? "Combo" : "ScoreV2"
+        notices.push(`Mod applied: ${modLabel} - Win condition: ${winConditionLabel}`)
       }
     }
   }
@@ -2565,7 +2573,7 @@ app.get("/api/match/:matchId/mappool", async (c) => {
       const slot = r["map_id"]?.trim() ?? ""
       const ov   = overrides.get(slot.toLowerCase())
       const beatmapId = r["beatmap_id"]?.trim() || undefined
-      const winCondition = caramelWinCondition(firstValue(r, ["win_con"]))
+      const winCondition = parseMapWinCondition(firstValue(r, ["win_con"]))
       const optionalMods = parseMappoolMods(firstValue(r, ["mods"]))
       if (winCondition === null) throw new Error(`${slot} has invalid win_con: ${firstValue(r, ["win_con"])}`)
       return {
@@ -2604,7 +2612,7 @@ app.get("/api/match/:matchId/mappool", async (c) => {
         pool: "WC",
         map: `${String(latestCaramel.payload.wildcardMap ?? "Caramel wildcard")}${source ? ` (${source})` : ""}`,
         beatmapId: String(latestCaramel.payload.wildcardBeatmapId),
-        winCondition: latestCaramel.payload.wildcardWinCondition === "accuracy" ? "accuracy" : "score",
+        winCondition: parseMapWinCondition(String(latestCaramel.payload.wildcardWinCondition ?? "")) ?? "score",
         optionalMods: [],
         status: wildcardOverride?.status?.trim() || (latestCaramel.status === "resolved" ? "completed" : "picked"),
         pickedBy: wildcardOverride?.picked_by?.trim() || latestCaramel.player,
@@ -2863,6 +2871,9 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
     const lobbyModsMatch = isFreemod || expectedLobbyMods.every((mod) => actualLobbyMods.has(mod))
     const playerAModsMatch = binding.expected.playerAMods.every((mod) => actualPlayerAMods.has(mod))
     const playerBModsMatch = binding.expected.playerBMods.every((mod) => actualPlayerBMods.has(mod))
+    const accuracyMode = binding.expected.winCondition === "accuracy"
+    const missCountMode = binding.expected.winCondition === "miss"
+    const comboMode = binding.expected.winCondition === "combo"
     const checks = [
       { key: "flow", label: "Portal map is awaiting score", ok: state.phase === "play" && samePlayer(state.currentSlot, binding.expected.slot), expected: `play ${binding.expected.slot}`, actual: `${state.phase} ${state.currentSlot ?? "none"}` },
       { key: "finished", label: "Game finished", ok: Boolean(game.endedAt), expected: "finished", actual: game.endedAt ?? "in progress" },
@@ -2873,11 +2884,32 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
       { key: "player_a_mods", label: `${match.playerA} mods`, ok: playerAModsMatch, expected: binding.expected.playerAMods.join(" ") || "None", actual: [...actualPlayerAMods].join(" ") || "None" },
       { key: "player_b_mods", label: `${match.playerB} mods`, ok: playerBModsMatch, expected: binding.expected.playerBMods.join(" ") || "None", actual: [...actualPlayerBMods].join(" ") || "None" },
       { key: "scoring", label: "Scoring type", ok: game.scoringType === binding.expected.scoringType, expected: binding.expected.scoringType, actual: game.scoringType || "unknown" },
+      ...(accuracyMode ? [{
+        key: "accuracies",
+        label: "Accuracies available",
+        ok: scoreA?.accuracy != null && scoreB?.accuracy != null,
+        expected: "both players",
+        actual: `${scoreA?.accuracy ?? "missing"} / ${scoreB?.accuracy ?? "missing"}`,
+      }] : []),
+      ...(missCountMode ? [{
+        key: "miss_counts",
+        label: "Miss counts available",
+        ok: scoreA?.misses != null && scoreB?.misses != null,
+        expected: "both players",
+        actual: `${scoreA?.misses ?? "missing"} / ${scoreB?.misses ?? "missing"}`,
+      }] : []),
+      ...(comboMode ? [{
+        key: "max_combos",
+        label: "Max combos available",
+        ok: scoreA?.maxCombo != null && scoreB?.maxCombo != null,
+        expected: "both players",
+        actual: `${scoreA?.maxCombo ?? "missing"} / ${scoreB?.maxCombo ?? "missing"}`,
+      }] : []),
     ]
-    const accuracyMode = binding.expected.winCondition === "accuracy"
     const scoreValue = (score: OsuMpScore | undefined): number | null => {
       if (!score) return null
       if (!accuracyMode) return score.score
+      if (score.accuracy === null) return null
       return Number((score.accuracy <= 1 ? score.accuracy * 100 : score.accuracy).toFixed(4))
     }
     return c.json({
@@ -2901,7 +2933,10 @@ app.get("/api/match/:matchId/test/mp-result", async (c) => {
         usesHdB: actualPlayerBMods.has("HD"),
         missCountA: scoreA?.misses ?? null,
         missCountB: scoreB?.misses ?? null,
-        missCountMode: isMissCountWinCondition(binding.expected.slot),
+        missCountMode,
+        comboA: scoreA?.maxCombo ?? null,
+        comboB: scoreB?.maxCombo ?? null,
+        comboMode,
       },
     })
   } catch (error) {
@@ -3265,13 +3300,15 @@ app.post("/api/match/:matchId/score", async (c) => {
   const rawScoreB = typeof body.scoreB === "string" || typeof body.scoreB === "number" ? parseScoreValue(body.scoreB) : null
   let usesHdA = body.usesHdA === true || body.hdA === true
   let usesHdB = body.usesHdB === true || body.hdB === true
-  const parsedMissCount = (value: unknown): number | null => {
+  const parsedMetric = (value: unknown): number | null => {
     if (value === undefined || value === null || value === "") return null
     const parsed = Number(value)
     return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
   }
-  const missCountA = parsedMissCount(body.missCountA)
-  const missCountB = parsedMissCount(body.missCountB)
+  const missCountA = parsedMetric(body.missCountA)
+  const missCountB = parsedMetric(body.missCountB)
+  const comboA = parsedMetric(body.comboA)
+  const comboB = parsedMetric(body.comboB)
   const wildcardRewards = Array.isArray(body.rewardIngredients)
     ? body.rewardIngredients.map((value) => String(value).trim().toLowerCase())
     : []
@@ -3442,14 +3479,21 @@ app.post("/api/match/:matchId/score", async (c) => {
       samePlayer(firstValue(record, ["map_id", "slot"]), slot) &&
       (!match.mappool || samePlayer(firstValue(record, ["round"]), match.mappool))
     )
-    const mapWinCondition = caramelWinCondition(firstValue(poolRecord ?? {}, ["win_con"]))
+    const mapWinCondition = parseMapWinCondition(firstValue(poolRecord ?? {}, ["win_con"]))
     if (mapWinCondition === null) {
       return c.json({ error: `${slot} has invalid win_con: ${firstValue(poolRecord ?? {}, ["win_con"])}` }, 409)
     }
-    const accuracyMode = mapWinCondition === "accuracy" || activeEvents.some((event) =>
-      effect(event) === "accuracy_mode" ||
-      (effect(event) === "wildcard_slot" && payloadFor(event).wildcardWinCondition === "accuracy")
-    )
+    let winCondition: MapWinCondition = mapWinCondition
+    for (const event of activeEvents) {
+      if (effect(event) === "accuracy_mode") winCondition = "accuracy"
+      if (effect(event) === "wildcard_slot") {
+        const wildcardWinCondition = parseMapWinCondition(String(payloadFor(event).wildcardWinCondition ?? ""))
+        if (wildcardWinCondition) winCondition = wildcardWinCondition
+      }
+    }
+    const accuracyMode = winCondition === "accuracy"
+    const missCountMode = winCondition === "miss"
+    const comboMode = winCondition === "combo"
     let hdDetection: "manual" | "osu_api" = "manual"
     if (!accuracyMode) {
       const expectedBeatmapId = Number(
@@ -3492,12 +3536,14 @@ app.post("/api/match/:matchId/score", async (c) => {
         }
       }
     }
-    const missCountMode = isMissCountWinCondition(slot)
     if (accuracyMode && (rawScoreA > 100 || rawScoreB > 100)) {
       return c.json({ error: "Accuracy values must be between 0% and 100%" }, 400)
     }
     if (missCountMode && (missCountA === null || missCountB === null)) {
-      return c.json({ error: "PS3 requires a nonnegative whole-number miss count for both players" }, 400)
+      return c.json({ error: `${slot} requires a nonnegative whole-number miss count for both players` }, 400)
+    }
+    if (comboMode && (comboA === null || comboB === null)) {
+      return c.json({ error: `${slot} requires a nonnegative whole-number max combo for both players` }, 400)
     }
 
     const applyScoreEffects = (
@@ -3551,7 +3597,7 @@ app.post("/api/match/:matchId/score", async (c) => {
             activated_at: event.activatedAt || now,
             resolution: JSON.stringify({
               ...event.resolution,
-              firstRun: { scoreA: rawScoreA, scoreB: rawScoreB, usesHdA, usesHdB, missCountA, missCountB },
+              firstRun: { scoreA: rawScoreA, scoreB: rawScoreB, usesHdA, usesHdB, missCountA, missCountB, comboA, comboB },
               replayReason: effect(event),
             }),
           }
@@ -3577,6 +3623,8 @@ app.post("/api/match/:matchId/score", async (c) => {
     let scoreB = currentAdjusted.scoreB
     let finalMissCountA = missCountA
     let finalMissCountB = missCountB
+    let finalComboA = comboA
+    let finalComboB = comboB
     if (storedReplay && bananaBreadActive) {
       const firstAdjusted = applyScoreEffects(
         Number(storedReplay.scoreA),
@@ -3587,13 +3635,26 @@ app.post("/api/match/:matchId/score", async (c) => {
       scoreA = Math.max(firstAdjusted.scoreA, currentAdjusted.scoreA)
       scoreB = Math.max(firstAdjusted.scoreB, currentAdjusted.scoreB)
       if (missCountMode) {
-        const firstMissCountA = parsedMissCount(storedReplay.missCountA)
-        const firstMissCountB = parsedMissCount(storedReplay.missCountB)
+        const firstMissCountA = parsedMetric(storedReplay.missCountA)
+        const firstMissCountB = parsedMetric(storedReplay.missCountB)
         if (firstMissCountA !== null && finalMissCountA !== null) finalMissCountA = Math.min(firstMissCountA, finalMissCountA)
         if (firstMissCountB !== null && finalMissCountB !== null) finalMissCountB = Math.min(firstMissCountB, finalMissCountB)
       }
+      if (comboMode) {
+        const firstComboA = parsedMetric(storedReplay.comboA)
+        const firstComboB = parsedMetric(storedReplay.comboB)
+        if (firstComboA !== null && finalComboA !== null) finalComboA = Math.max(firstComboA, finalComboA)
+        if (firstComboB !== null && finalComboB !== null) finalComboB = Math.max(firstComboB, finalComboB)
+      }
     }
-    const resultComparison = compareMapResults(slot, scoreA, scoreB, finalMissCountA, finalMissCountB)
+    const resultComparison = compareMapResults(winCondition, {
+      scoreA,
+      scoreB,
+      missCountA: finalMissCountA,
+      missCountB: finalMissCountB,
+      comboA: finalComboA,
+      comboB: finalComboB,
+    })
     if (resultComparison === null) {
       return c.json({ error: "The map result is missing required win-condition values" }, 400)
     }
@@ -3605,10 +3666,15 @@ app.post("/api/match/:matchId/score", async (c) => {
         rawScores: { scoreA: rawScoreA, scoreB: rawScoreB },
         adjustedScores: { scoreA, scoreB },
         missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
+        combos: comboMode ? { playerA: finalComboA, playerB: finalComboB } : undefined,
         state: flowBefore,
         notices: [missCountMode
-          ? "PS3 miss counts are tied. Replay this map and submit the next result."
-          : "Scores are tied. Replay this map and submit the next result."],
+          ? "Miss counts are tied. Replay this map and submit the next result."
+          : comboMode
+            ? "Max combos are tied. Replay this map and submit the next result."
+            : accuracyMode
+              ? "Accuracy is tied. Replay this map and submit the next result."
+              : "Scores are tied. Replay this map and submit the next result."],
       })
     }
     const winner = resultComparison > 0 ? playerA : playerB
@@ -3678,6 +3744,8 @@ app.post("/api/match/:matchId/score", async (c) => {
         finalScores: { scoreA, scoreB },
         hd: { playerA: usesHdA, playerB: usesHdB },
         missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
+        combos: comboMode ? { playerA: finalComboA, playerB: finalComboB } : undefined,
+        winCondition,
         winner,
       }
 
@@ -3821,7 +3889,7 @@ app.post("/api/match/:matchId/score", async (c) => {
       "match_map",
       `${matchId}:${slot}`,
       beforeJson,
-      JSON.stringify({ slot, rawScoreA, rawScoreB, usesHdA, usesHdB, hdDetection, missCountA: finalMissCountA, missCountB: finalMissCountB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
+      JSON.stringify({ slot, rawScoreA, rawScoreB, usesHdA, usesHdB, hdDetection, winCondition, missCountA: finalMissCountA, missCountB: finalMissCountB, comboA: finalComboA, comboB: finalComboB, scoreA, scoreB, winner, status: "completed", pool, ingredient, ingredientAmount, ingredientAwards }),
     ).catch(() => {})
 
     return c.json({
@@ -3836,8 +3904,9 @@ app.post("/api/match/:matchId/score", async (c) => {
       },
       hd: { playerA: usesHdA, playerB: usesHdB },
       hdDetection,
-      winCondition: missCountMode ? "miss_count" : accuracyMode ? "accuracy" : "score",
+      winCondition,
       missCounts: missCountMode ? { playerA: finalMissCountA, playerB: finalMissCountB } : undefined,
+      combos: comboMode ? { playerA: finalComboA, playerB: finalComboB } : undefined,
       winner,
       totals,
       pool,
@@ -4287,7 +4356,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
         const title = firstValue(record, ["title"])
         const stage = firstValue(record, ["stage"])
         const mod = firstValue(record, ["mod"])
-        const winCondition = caramelWinCondition(firstValue(record, ["win_con"]))
+        const winCondition = parseMapWinCondition(firstValue(record, ["win_con"]))
         const mappoolYear = firstValue(record, ["mappool_year"])
         const beatmapId = firstValue(record, ["map_id"])
         if (
