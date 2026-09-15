@@ -173,8 +173,10 @@ export const getMappools = cached(
         stage.expectedMapCount != null &&
         stage.maps.length !== stage.expectedMapCount
       ) {
-        // Not fatal: the pool still renders. Signals a slot-count mismatch
-        // between the Settings row and the actual tab.
+        // Not fatal: the pool still renders. Short usually means a slot has no
+        // beatmap id yet (an original not uploaded to osu!), and that slot is
+        // simply absent until the id is filled in; long means the Settings
+        // counts row is stale.
         console.warn(
           `[mappools] stage "${stage.name}" parsed ${stage.maps.length} maps ` +
             `but Settings expects ${stage.expectedMapCount}`
