@@ -160,6 +160,12 @@ own assignment. Any authenticated referee can still open an unfinished match for
 the assignment. When an admin creates a lobby assigned to another referee, the admin automatically takes over the
 Sheet assignment. Admins can also reopen terminal matches from the latest/current-round schedule to repost results.
 
+Potential lower-bracket schedules may use an `a`-`d` suffix on a numeric match ID, such as `41a` through `41d`.
+While the numeric row has no finalized player pairing, the portal shows the suffixed rows so referees can sign up.
+Once the numeric row's players match one candidate, the API exposes only the numeric match. The selected candidate is
+resolved by player pairing, then matching date/time, and its non-empty referee assignment is inherited. Subsequent
+referee signup, withdrawal, or admin takeover updates both the numeric row and the selected candidate row.
+
 Match statuses are normalized to:
 
 ```text

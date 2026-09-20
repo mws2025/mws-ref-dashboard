@@ -33,6 +33,7 @@ import {
   refereeAssignments,
   refereeIsAssigned,
   resolveLobbyReferees,
+  resolvePotentialScheduleMatches,
   scheduleDateSerial,
 } from "../../src/lib/match-rules"
 
@@ -99,6 +100,7 @@ type ApiMatch = {
   currentMap?: string
   notes?: string
   referee?: string
+  refereeSourceId?: string
   streamer?: string
 }
 
@@ -955,9 +957,11 @@ function matchesFromSheetValues(matchValues: string[][], playerValues: string[][
   const playersById = mapPlayersById(playerRecords)
   const osuIdsMap   = mapOsuIdsByKey(playerRecords)
 
-  return sheetRowsToRecords(matchValues)
+  const matches = sheetRowsToRecords(matchValues)
     .map((record) => mapMatchRecord(record, playersById, osuIdsMap))
     .filter((match) => match.id)
+
+  return resolvePotentialScheduleMatches(matches)
     .sort(compareMatches)
 }
 
@@ -1315,20 +1319,33 @@ async function updateMatchField(env: Bindings, matchId: string, fieldName: strin
 type SheetCellValue = string | number | boolean
 
 async function updateMatchFields(env: Bindings, matchId: string, fields: Record<string, SheetCellValue>): Promise<void> {
+  await updateMatchFieldsForIds(env, [matchId], fields)
+}
+
+async function updateMatchFieldsForIds(
+  env: Bindings,
+  matchIds: readonly string[],
+  fields: Record<string, SheetCellValue>,
+): Promise<void> {
   const sheetId = mustEnv(env, "GOOGLE_SHEETS_TOURNAMENT_ID")
   const values = await getSheetValues(env, "matches!A1:Z")
   const [headers, ...rows] = values
   if (!headers) return
   const normalizedHeaders = headers.map((h) => h.trim().toLowerCase().replace(/[\s-]/g, "_"))
-  const rowIdx = rows.findIndex((r) => r[0]?.trim() === matchId)
-  if (rowIdx < 0) throw new Error(`Match "${matchId}" not found in matches sheet`)
-  const rowNum = rowIdx + 2
+  const matchIdColumn = normalizedHeaders.indexOf("match_id")
+  if (matchIdColumn < 0) throw new Error('Column "match_id" not found in matches sheet')
+  const uniqueMatchIds = [...new Set(matchIds.map((id) => id.trim()).filter(Boolean))]
 
   const data: { range: string; values: SheetCellValue[][] }[] = []
-  for (const [fieldName, value] of Object.entries(fields)) {
-    const colIdx = normalizedHeaders.indexOf(fieldName)
-    if (colIdx < 0) throw new Error(`Column "${fieldName}" not found in matches sheet`)
-    data.push({ range: `matches!${colLetter(colIdx)}${rowNum}`, values: [[value]] })
+  for (const matchId of uniqueMatchIds) {
+    const rowIdx = rows.findIndex((row) => row[matchIdColumn]?.trim() === matchId)
+    if (rowIdx < 0) throw new Error(`Match "${matchId}" not found in matches sheet`)
+    const rowNum = rowIdx + 2
+    for (const [fieldName, value] of Object.entries(fields)) {
+      const colIdx = normalizedHeaders.indexOf(fieldName)
+      if (colIdx < 0) throw new Error(`Column "${fieldName}" not found in matches sheet`)
+      data.push({ range: `matches!${colLetter(colIdx)}${rowNum}`, values: [[value]] })
+    }
   }
 
   _cacheInvalidate("matches")
@@ -1343,6 +1360,14 @@ async function updateMatchFields(env: Bindings, matchId: string, fields: Record<
     const reason = await res.text()
     throw new Error(`Sheets batch write failed: ${res.status} ${reason}`)
   }
+}
+
+async function updateResolvedMatchReferee(env: Bindings, match: ApiMatch, referee: string): Promise<void> {
+  await updateMatchFieldsForIds(
+    env,
+    [match.id, ...(match.refereeSourceId ? [match.refereeSourceId] : [])],
+    { referee },
+  )
 }
 
 async function batchUpdateValues(env: Bindings, data: { range: string; values: string[][] }[]): Promise<void> {
@@ -2480,7 +2505,7 @@ app.put("/api/match/:matchId/referee", async (c) => {
     }
 
     const referee = after.join(", ")
-    await updateMatchField(c.env, matchId, "referee", referee)
+    await updateResolvedMatchReferee(c.env, match, referee)
     await appendAuditLog(
       c.env,
       sessionUser.username,
@@ -4940,6 +4965,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
 
   const match = await getMatchById(c.env, matchId)
   if (!match) return c.json({ error: "Match not found" }, 404)
+  const resolvedMatch = match
   const operatorUsername = sessionUser.username
   const playerA = match.playerA
   const playerB = match.playerB
@@ -4976,7 +5002,7 @@ app.post("/api/match/:matchId/create-lobby", async (c) => {
 
   async function persistAdminTakeover(): Promise<void> {
     if (!adminTookOver) return
-    await updateMatchField(c.env, matchId, "referee", referee)
+    await updateResolvedMatchReferee(c.env, resolvedMatch, referee)
     await appendAuditLog(
       c.env,
       operatorUsername,

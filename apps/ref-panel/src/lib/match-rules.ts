@@ -49,6 +49,109 @@ export function latestRoundScheduleMatches<T extends { round: string }>(matches:
   return matches.filter((match) => tournamentRoundRank(match.round) === latestRank)
 }
 
+type PotentialScheduleMatch = {
+  id: string
+  playerA: string
+  playerB: string
+  date: string
+  time: string
+  referee?: string
+}
+
+export type ResolvedScheduleMatch<T extends PotentialScheduleMatch> = T & {
+  refereeSourceId?: string
+}
+
+function potentialMatchParts(id: string): { baseId: string; suffix: string } | null {
+  const match = id.trim().match(/^(\d+)([a-d])$/i)
+  return match ? { baseId: match[1], suffix: match[2].toLowerCase() } : null
+}
+
+function normalizedPlayer(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+function isFinalizedPlayer(value: string): boolean {
+  const normalized = normalizedPlayer(value)
+  return Boolean(normalized) &&
+    !["-", "tbd", "unknown", "n/a"].includes(normalized) &&
+    !/^(winner|loser)\b/.test(normalized)
+}
+
+function sameMatchup(left: PotentialScheduleMatch, right: PotentialScheduleMatch): boolean {
+  if (
+    !isFinalizedPlayer(left.playerA) || !isFinalizedPlayer(left.playerB) ||
+    !isFinalizedPlayer(right.playerA) || !isFinalizedPlayer(right.playerB)
+  ) return false
+
+  const leftPlayers = [normalizedPlayer(left.playerA), normalizedPlayer(left.playerB)].sort()
+  const rightPlayers = [normalizedPlayer(right.playerA), normalizedPlayer(right.playerB)].sort()
+  return leftPlayers[0] === rightPlayers[0] && leftPlayers[1] === rightPlayers[1]
+}
+
+function selectedPotentialMatch<T extends PotentialScheduleMatch>(base: T, candidates: readonly T[]): T | null {
+  const matching = candidates.filter((candidate) => sameMatchup(base, candidate))
+  if (matching.length === 0) return null
+
+  return [...matching].sort((left, right) => {
+    const score = (candidate: T): number =>
+      (candidate.date.trim() === base.date.trim() ? 4 : 0) +
+      (candidate.time.trim() === base.time.trim() ? 2 : 0) +
+      (candidate.referee?.trim() ? 1 : 0)
+    return score(right) - score(left) || left.id.localeCompare(right.id, undefined, { numeric: true })
+  })[0]
+}
+
+/**
+ * Potential lower-bracket schedules use IDs such as 41a-41d. Until the numeric
+ * row has a finalized matchup, expose those candidates for referee signup.
+ * Once finalized, expose only the numeric row and inherit the selected
+ * candidate's referee assignment.
+ */
+export function resolvePotentialScheduleMatches<T extends PotentialScheduleMatch>(
+  matches: readonly T[],
+): Array<ResolvedScheduleMatch<T>> {
+  const bases = new Map(matches.filter((match) => !potentialMatchParts(match.id)).map((match) => [match.id.trim(), match]))
+  const candidatesByBase = new Map<string, T[]>()
+  for (const match of matches) {
+    const potential = potentialMatchParts(match.id)
+    if (!potential) continue
+    const candidates = candidatesByBase.get(potential.baseId) ?? []
+    candidates.push(match)
+    candidatesByBase.set(potential.baseId, candidates)
+  }
+
+  const selectedByBase = new Map<string, T | null>()
+  for (const [baseId, candidates] of candidatesByBase) {
+    const base = bases.get(baseId)
+    selectedByBase.set(baseId, base ? selectedPotentialMatch(base, candidates) : null)
+  }
+
+  const resolved: Array<ResolvedScheduleMatch<T>> = []
+  for (const match of matches) {
+    const potential = potentialMatchParts(match.id)
+    if (potential) {
+      if (!bases.has(potential.baseId) || !selectedByBase.get(potential.baseId)) resolved.push({ ...match })
+      continue
+    }
+
+    const candidates = candidatesByBase.get(match.id.trim())
+    if (!candidates) {
+      resolved.push({ ...match })
+      continue
+    }
+
+    const selected = selectedByBase.get(match.id.trim())
+    if (!selected) continue
+    resolved.push({
+      ...match,
+      referee: selected.referee?.trim() || match.referee,
+      refereeSourceId: selected.id,
+    })
+  }
+  return resolved
+}
+
 export function baseBanLimitForRound(round: string): number {
   const normalized = round.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
   return ["ro32", "round32", "roundof32", "ro16", "round16", "roundof16"].includes(normalized)

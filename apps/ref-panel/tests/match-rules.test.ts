@@ -35,6 +35,7 @@ import {
   refereeAssignments,
   refereeIsAssigned,
   resolveLobbyReferees,
+  resolvePotentialScheduleMatches,
   scheduleDateSerial,
 } from "../src/lib/match-rules.ts"
 
@@ -99,6 +100,33 @@ describe("lobby mods", () => {
 })
 
 describe("match progression", () => {
+  test("shows potential lower-bracket rows until the canonical matchup is finalized", () => {
+    const common = { round: "Quarterfinals", date: "9/20/2026", time: "18:00" }
+    const matches = [
+      { ...common, id: "41", playerA: "TBD", playerB: "TBD", referee: "" },
+      { ...common, id: "41a", playerA: "Alpha", playerB: "Bravo", referee: "Ref A" },
+      { ...common, id: "41b", playerA: "Alpha", playerB: "Charlie", referee: "Ref B" },
+      { ...common, id: "42", playerA: "Delta", playerB: "Echo", referee: "Ref C" },
+    ]
+
+    expect(resolvePotentialScheduleMatches(matches).map((match) => match.id)).toEqual(["41a", "41b", "42"])
+  })
+
+  test("collapses a finalized potential matchup into its numeric ID and inherits its referee", () => {
+    const matches = [
+      { id: "41", playerA: "Bravo", playerB: "Alpha", date: "9/20/2026", time: "18:00", referee: "" },
+      { id: "41a", playerA: "Alpha", playerB: "Bravo", date: "9/19/2026", time: "19:00", referee: "Ref A" },
+      { id: "41b", playerA: "Alpha", playerB: "Bravo", date: "9/20/2026", time: "18:00", referee: "Ref B" },
+      { id: "41c", playerA: "Alpha", playerB: "Charlie", date: "9/20/2026", time: "18:00", referee: "Ref C" },
+    ]
+
+    expect(resolvePotentialScheduleMatches(matches)).toEqual([{
+      ...matches[0],
+      referee: "Ref B",
+      refereeSourceId: "41b",
+    }])
+  })
+
   test("shows only the latest available tournament round in the schedule", () => {
     const matches = [
       { id: "1", round: "Round of 32" },
