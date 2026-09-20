@@ -157,6 +157,7 @@ interface Props {
   homeModA?: HomeMod
   homeModB?: HomeMod
   homeModTurnPlayer?: string
+  manualHomeModSelection?: boolean
   onHomeModSelect?: (player: string, homeMod: HomeMod) => void
   onClearHomeMod?: (player: string) => void
   lobbyNameMismatch?: { found: string; expected: string }
@@ -184,7 +185,7 @@ export function PlayerColumn({
   round, refName, streamer,
   onInvAChange, onInvBChange,
   onCreateLobby, onJoinLobby, onCloseLobby, onPostResult, onSendReminder, onForfeit, onResetMatch, onScoreEdit,
-  homeModA, homeModB, homeModTurnPlayer, onHomeModSelect, onClearHomeMod,
+  homeModA, homeModB, homeModTurnPlayer, manualHomeModSelection = false, onHomeModSelect, onClearHomeMod,
   lobbyNameMismatch, onRetryJoin, onClearLobbyMismatch,
   matchStatus, hasLobby = false, isDemo = false, isAdmin = false, postResultReady = false, testResultUnlocked = false,
 }: Props) {
@@ -229,7 +230,7 @@ export function PlayerColumn({
           )}
           <HomeModControl
             value={homeModA}
-            canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerA.toLowerCase()}
+            canChoose={!isDemo && (manualHomeModSelection || homeModTurnPlayer?.toLowerCase() === playerA.toLowerCase())}
             onSelect={(homeMod) => onHomeModSelect?.(playerA, homeMod)}
             onClear={!isDemo && homeModA ? () => onClearHomeMod?.(playerA) : undefined}
           />
@@ -257,7 +258,7 @@ export function PlayerColumn({
           )}
           <HomeModControl
             value={homeModB}
-            canChoose={!isDemo && homeModTurnPlayer?.toLowerCase() === playerB.toLowerCase()}
+            canChoose={!isDemo && (manualHomeModSelection || homeModTurnPlayer?.toLowerCase() === playerB.toLowerCase())}
             onSelect={(homeMod) => onHomeModSelect?.(playerB, homeMod)}
             onClear={!isDemo && homeModB ? () => onClearHomeMod?.(playerB) : undefined}
           />

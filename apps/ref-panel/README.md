@@ -391,7 +391,7 @@ any SSE event whose embedded channel does not exactly match its mounted lobby.
 | --- | --- | --- |
 | `record_rolls` | `rollA`, `rollB` | Stores whole-number rolls from 1-100; a tie stays in `roll`, otherwise advances to `order`. |
 | `choose_order` | `choice: "pick_first" \| "ban_first"` | Sets first picker/banner and advances to `ban`. |
-| `set_home_mod` | `player`, `homeMod` | Stores a post-ban home mod; after both choose, advances to `craft`. |
+| `set_home_mod` | `player`, `homeMod`, optional `manualOrder` | Stores a home mod. Automated order enforces the home-mod turn and advances after both choices; manual order allows either player without changing the current phase. |
 
 `POST /api/match/:matchId/action` body:
 
@@ -406,7 +406,8 @@ any SSE event whose embedded channel does not exactly match its mounted lobby.
 
 When `manualOrder` is omitted or `false`, the endpoint enforces the current match-flow phase and expected player. With
 `manualOrder: true`, either player may pick, ban, or protect an eligible map. Manual order is disabled by default in the
-portal. Recipes are crafted during `craft` before a map is selected. RO32 and RO16 use two base bans total (one per
+portal. It also exposes both existing player-column home-mod selectors so either home mod can be set or corrected
+without advancing the automated phase. Recipes are crafted during `craft` before a map is selected. RO32 and RO16 use two base bans total (one per
 player); Quarterfinals and later use four base bans total (two per player). Beignets can grant its explicit extra ban
 up to the four-ban absolute ceiling.
 After the base bans, both players choose home mods before crafting and picking. After the pick, call
@@ -503,9 +504,10 @@ that exact score pair with the completed osu! game and fills accuracy, miss-coun
 It retries briefly for osu! history propagation and leaves manual metric entry available as a fallback. Unsupported
 non-empty values stop mappool loading/setup with an explicit configuration error.
 
-The optional `mods` column is informational about the mods players may choose. Any non-empty value configures
-`!mp mods Freemod` (plus `NF` when enabled); no separate mod-restriction command is sent. A blank value preserves the
-normal pool mod setup. The portal does not validate the listed mod acronyms.
+Every map enables optional HD through `!mp mods Freemod`; DT maps use `!mp mods DT Freemod`. Configured `NF` is
+appended to either command. HR remains a required per-player mod on HR slots and is validated by integration mode.
+The optional `mods` column is informational about the mods players may choose; no separate mod-restriction command is
+sent and the portal does not validate the listed mod acronyms.
 
 Other mutation bodies:
 

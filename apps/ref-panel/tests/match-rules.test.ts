@@ -58,12 +58,13 @@ describe("roll announcements", () => {
 })
 
 describe("lobby mods", () => {
-  test("adds NF as a separate command argument", () => {
-    expect(lobbyModsForPool("HR", true)).toBe("HR NF")
-    expect(lobbyModsForPool("DT", true)).toBe("DT NF")
+  test("enables optional HD through freemod on every pool", () => {
+    expect(lobbyModsForPool("NM", false)).toBe("Freemod")
+    expect(lobbyModsForPool("PS", false)).toBe("Freemod")
+    expect(lobbyModsForPool("HR", true)).toBe("Freemod NF")
+    expect(lobbyModsForPool("DT", true)).toBe("DT Freemod NF")
     expect(lobbyModsForPool("FM", true)).toBe("Freemod NF")
     expect(lobbyModsForPool("TB", true)).toBe("Freemod NF")
-    expect(lobbyModsForPool("PS", true)).toBe("NF")
   })
 
   test("preserves selected mods when adding recipe mods", () => {
@@ -72,11 +73,11 @@ describe("lobby mods", () => {
   })
 
   test("maps validated Caramel sheet mods to lobby acronyms", () => {
-    expect(caramelLobbyMods("", true)).toBe("NF")
-    expect(caramelLobbyMods("double_time", true)).toBe("DT NF")
-    expect(caramelLobbyMods("hard_rock", false)).toBe("HR")
-    expect(caramelLobbyMods("easy-double_time", true)).toBe("EZ DT NF")
-    expect(caramelLobbyMods("autopilot", false)).toBe("AP")
+    expect(caramelLobbyMods("", true)).toBe("Freemod NF")
+    expect(caramelLobbyMods("double_time", true)).toBe("DT Freemod NF")
+    expect(caramelLobbyMods("hard_rock", false)).toBe("HR Freemod")
+    expect(caramelLobbyMods("easy-double_time", true)).toBe("EZ DT Freemod NF")
+    expect(caramelLobbyMods("autopilot", false)).toBe("AP Freemod")
     expect(caramelLobbyMods("unsupported", true)).toBeNull()
   })
 

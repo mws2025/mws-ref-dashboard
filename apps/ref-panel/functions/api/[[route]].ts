@@ -2057,7 +2057,6 @@ async function activateRecipesForPick(
   playerA: string,
   playerB: string,
   mapWinConditionValue = "",
-  mapOptionalModsValue = "",
 ): Promise<RecipePickSetup> {
   const [events, items, configMap] = await Promise.all([
     getRecipeEvents(env, matchId),
@@ -2086,10 +2085,7 @@ async function activateRecipesForPick(
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
   const mapWinCondition = parseMapWinCondition(mapWinConditionValue)
   if (mapWinCondition === null) throw new Error(`${slot} has invalid win_con: ${mapWinConditionValue}`)
-  const usesMapFreemod = mapOptionalModsValue.trim().length > 0
-  let mods = usesMapFreemod
-    ? formatLobbyMods(["Freemod"], enforceNF)
-    : lobbyModsForPool(pool, enforceNF)
+  let mods = lobbyModsForPool(pool, enforceNF)
   const commandsBefore: string[] = []
   const notices: string[] = []
   let beatmapId: string | undefined
@@ -2110,7 +2106,7 @@ async function activateRecipesForPick(
       effectType === "mod_replace" &&
       mods.split(/\s+/).some((mod) => mod.toUpperCase() === "DT")
     ) {
-      mods = formatLobbyMods(["NC"], enforceNF)
+      mods = formatLobbyMods(["NC", "Freemod"], enforceNF)
     } else if (effectType === "mod_add_self") {
       const selectedMod = String(payload.mod ?? "").toUpperCase()
       if (selectedMod) {
@@ -2159,7 +2155,11 @@ async function activateRecipesForPick(
         const appliedMods = typeof wildcardMod === "string"
           ? caramelLobbyMods(wildcardMod, false)
           : null
-        const modLabel = !appliedMods || appliedMods === "None" ? "NM (none)" : appliedMods
+        const fixedMods = appliedMods
+          ?.split(/\s+/)
+          .filter((mod) => !["FREEMOD", "NF"].includes(mod.toUpperCase()))
+          .join(" ")
+        const modLabel = fixedMods || "NM (none)"
         notices.push(`Caramel map: (${year}) - ${sourceSlot} - ${mapTitle}`)
         const winConditionLabel = winCondition === "accuracy"
           ? "Accuracy"
@@ -2173,8 +2173,9 @@ async function activateRecipesForPick(
     .split(/\s+/)
     .map((mod) => mod.toUpperCase())
     .filter((mod) => mod && mod !== "NONE" && mod !== "FREEMOD")
+  const poolPlayerMods = pool.trim().toUpperCase() === "HR" ? ["HR"] : []
   const requiredMods = (playerName: string): string[] => [
-    ...new Set([...globalPlayerMods, ...(extraPlayerMods.get(playerName.toLowerCase()) ?? [])]),
+    ...new Set([...globalPlayerMods, ...poolPlayerMods, ...(extraPlayerMods.get(playerName.toLowerCase()) ?? [])]),
   ]
   return {
     eventIds: active.map((event) => event.id),
@@ -3053,6 +3054,7 @@ app.post("/api/match/:matchId/state", async (c) => {
       const player = typeof body.player === "string" ? body.player.trim() : ""
       const homeMod = normalizeHomeMod(body.homeMod)
       const clearing = body.homeMod == null || body.homeMod === ""
+      const manualOrder = body.manualOrder === true
       if (!player || (!homeMod && !clearing)) return c.json({ error: "player and valid homeMod required" }, 400)
       if (!samePlayer(player, match.playerA) && !samePlayer(player, match.playerB)) {
         return c.json({ error: "Player must belong to this match" }, 400)
@@ -3062,22 +3064,25 @@ app.post("/api/match/:matchId/state", async (c) => {
         nextState = {
           ...state,
           ...(isA ? { homeModA: undefined } : { homeModB: undefined }),
-          phase: "home_mod",
-          turnPlayer: player,
+          ...(manualOrder ? {} : { phase: "home_mod" as const, turnPlayer: player }),
         }
       } else {
-        if (state.phase !== "home_mod") return c.json({ error: "Home mods are not open right now" }, 409)
-        if (state.turnPlayer && state.turnPlayer.toLowerCase() !== player.toLowerCase()) {
+        if (!manualOrder && state.phase !== "home_mod") return c.json({ error: "Home mods are not open right now" }, 409)
+        if (!manualOrder && state.turnPlayer && state.turnPlayer.toLowerCase() !== player.toLowerCase()) {
           return c.json({ error: `${state.turnPlayer} must choose home mod next` }, 409)
         }
         const isA = player.toLowerCase() === match.playerA.toLowerCase()
         const updated: MatchFlowState = { ...state, ...(isA ? { homeModA: homeMod } : { homeModB: homeMod }) }
-        const other = opponentOf(player, match.playerA, match.playerB)
-        const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? updated.homeModA : updated.homeModB
-        if (!otherHasHomeMod) {
-          nextState = { ...updated, phase: "home_mod", turnPlayer: other }
+        if (manualOrder) {
+          nextState = updated
         } else {
-          nextState = { ...updated, phase: "craft", turnPlayer: updated.firstPicker }
+          const other = opponentOf(player, match.playerA, match.playerB)
+          const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? updated.homeModA : updated.homeModB
+          if (!otherHasHomeMod) {
+            nextState = { ...updated, phase: "home_mod", turnPlayer: other }
+          } else {
+            nextState = { ...updated, phase: "craft", turnPlayer: updated.firstPicker }
+          }
         }
       }
     } else {
@@ -5723,7 +5728,6 @@ app.post("/api/match/:matchId/setup-map", async (c) => {
       match.playerA,
       match.playerB,
       firstValue(poolRecord ?? {}, ["win_con"]),
-      firstValue(poolRecord ?? {}, ["mods"]),
     )
     const expectedBeatmapId = Number(recipeSetup.beatmapId ?? firstValue(poolRecord ?? {}, ["beatmap_id"]))
     const scoringCommand = recipeSetup.commandsBefore

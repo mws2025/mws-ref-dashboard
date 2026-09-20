@@ -189,7 +189,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `GET /api/match/:id/state` returns persisted flow state with sane default.
 - [x] `POST /api/match/:id/state` stores rolls, order choice, and home mod choices.
 - [x] `POST /api/match/:id/action` enforces ban/pick phase + expected player before writing map actions.
-- [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column.
+- [x] Flow controls merged into Match Control tab for current phase, roll save, order choice, and score entry; home mod choice lives in the player column and remains directly editable when manual order is enabled.
 - [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
 - [x] Ban state uses the latest row per slot; RO32 has one base ban per player, later rounds have two, and Beignets can add its explicit extra ban up to the four-ban ceiling.
 - [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
@@ -203,7 +203,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
 - [x] All 24 recipe definitions match the reference costs/effects; duplicate Cinnamon Roll labels are distinguished by action.
 - [x] Recipe effects modify map commands, lobby mods, score resolution, replay flow, inventory rewards, bans, and protection.
-- [x] Every non-Freemod map allows optional HD through `!mp allowed_mods HD`; Sugar Cookies excludes HT while Custard retains it.
+- [x] Every map enables optional HD through `!mp mods Freemod`; DT uses `!mp mods DT Freemod`, configured NF is retained, and HR remains required per player on HR slots.
 - [x] Score announcements include both inventories, and a deciding score names the winner with GGWP without starting another timer.
 - [x] Caramel exclusively locks crafting and refunds displaced pending recipes; Magic Cake copies the opponent's latest resolved recipe.
 - [x] Caramel draws randomly among the globally least-used maps across all dedicated `caramel_maps` rows, immediately creates/plays a `WC` map independent of TB, announces and applies the row's mod/win condition, refunds pending recipes, and awards the winner's two choices during score settlement.

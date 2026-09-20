@@ -416,17 +416,9 @@ export function formatLobbyMods(mods: readonly string[], enforceNF: boolean): st
 }
 
 export function lobbyModsForPool(pool: string, enforceNF: boolean): string {
-  switch (pool.trim().toUpperCase()) {
-    case "FM":
-    case "TB":
-      return formatLobbyMods(["Freemod"], enforceNF)
-    case "HR":
-      return formatLobbyMods(["HR"], enforceNF)
-    case "DT":
-      return formatLobbyMods(["DT"], enforceNF)
-    default:
-      return formatLobbyMods([], enforceNF)
-  }
+  return pool.trim().toUpperCase() === "DT"
+    ? formatLobbyMods(["DT", "Freemod"], enforceNF)
+    : formatLobbyMods(["Freemod"], enforceNF)
 }
 
 export function parseMappoolMods(value: string): string[] {
@@ -451,7 +443,7 @@ export function caramelLobbyMods(value: string, enforceNF: boolean): string | nu
     autopilot: ["AP"],
   }
   const mods = modsBySheetValue[normalized]
-  return mods ? formatLobbyMods(mods, enforceNF) : null
+  return mods ? formatLobbyMods([...mods, "Freemod"], enforceNF) : null
 }
 
 export function parseMapWinCondition(value: string): MapWinCondition | null {

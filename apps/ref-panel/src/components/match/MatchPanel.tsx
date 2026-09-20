@@ -385,10 +385,12 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     }
     const other = opponentOf(player, match.playerA, match.playerB)
     const otherHasHomeMod = other.toLowerCase() === match.playerA.toLowerCase() ? next.homeModA : next.homeModB
-    const nextState: MatchFlowState = otherHasHomeMod
-      ? { ...next, phase: "craft", turnPlayer: next.firstPicker }
-      : { ...next, phase: "home_mod", turnPlayer: other }
-    postStateAction({ action: "set_home_mod", player, homeMod }, nextState)
+    const nextState: MatchFlowState = manualMapActions
+      ? next
+      : otherHasHomeMod
+        ? { ...next, phase: "craft", turnPlayer: next.firstPicker }
+        : { ...next, phase: "home_mod", turnPlayer: other }
+    postStateAction({ action: "set_home_mod", player, homeMod, manualOrder: manualMapActions }, nextState)
   }
 
   function advanceLocalAfterMapAction(action: "pick" | "ban" | "protect", player: string, slot: string) {
@@ -607,11 +609,10 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     const next: MatchFlowState = {
       ...current,
       ...(isA ? { homeModA: undefined } : { homeModB: undefined }),
-      phase: "home_mod",
-      turnPlayer: player,
+      ...(manualMapActions ? {} : { phase: "home_mod" as const, turnPlayer: player }),
       updatedAt: new Date().toISOString(),
     }
-    postStateAction({ action: "set_home_mod", player, homeMod: null }, next)
+    postStateAction({ action: "set_home_mod", player, homeMod: null, manualOrder: manualMapActions }, next)
   }
 
   function postMatchResult() {
@@ -1060,6 +1061,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
           homeModA={flowState?.homeModA}
           homeModB={flowState?.homeModB}
           homeModTurnPlayer={flowState?.phase === "home_mod" ? flowState.turnPlayer : undefined}
+          manualHomeModSelection={manualMapActions}
           onHomeModSelect={setHomeMod}
           onClearHomeMod={clearHomeMod}
           matchStatus={liveMatchStatus}
