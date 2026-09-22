@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { RECIPES, RECIPES_ALPHABETICAL } from "../src/data/recipes.ts"
+import { RECIPES, RECIPES_ALPHABETICAL, recipesFromCatalog } from "../src/data/recipes.ts"
 import {
   addLobbyMod,
   baseBanLimitForRound,
@@ -389,5 +389,15 @@ describe("recipe catalog", () => {
 
   test("defines Quiche as forced HD", () => {
     expect(RECIPES.find((recipe) => recipe.id === 11)?.desc).toContain("HD")
+  })
+
+  test("uses Sheet recipe costs instead of bundled requirements", () => {
+    expect(recipesFromCatalog([
+      { id: 11, cost: { egg: 4 }, enabled: true },
+      { id: 14, cost: { butter: 4 }, enabled: true },
+    ])).toEqual([
+      { ...RECIPES.find((recipe) => recipe.id === 11)!, cost: { egg: 4 } },
+      { ...RECIPES.find((recipe) => recipe.id === 14)!, cost: { butter: 4 } },
+    ])
   })
 })

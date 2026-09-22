@@ -44,6 +44,12 @@ export interface Recipe {
   inputs?: RecipeInputKind[]
 }
 
+export interface RecipeCatalogEntry {
+  id: number
+  cost: Partial<Inventory>
+  enabled: boolean
+}
+
 export interface RecipeActivation {
   mod?: string
   modA?: string

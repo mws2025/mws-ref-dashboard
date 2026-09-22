@@ -1922,6 +1922,15 @@ function recipeCost(item: SheetRecord): InventoryMap {
   ])) as InventoryMap
 }
 
+function publicRecipeCatalogItem(item: SheetRecord) {
+  const cost = recipeCost(item)
+  return {
+    id: recipeIdNumber(firstValue(item, ["item_id", "id"])),
+    cost: Object.fromEntries(INVENTORY_KEYS.filter((key) => cost[key] > 0).map((key) => [key, cost[key]])),
+    enabled: firstValue(item, ["enabled"]).toLowerCase() !== "false",
+  }
+}
+
 function samePlayer(left?: string, right?: string): boolean {
   return (left ?? "").trim().toLowerCase() === (right ?? "").trim().toLowerCase()
 }
@@ -4217,8 +4226,14 @@ app.post("/api/match/:matchId/post-result", async (c) => {
 app.get("/api/match/:matchId/recipes", async (c) => {
   const matchId = c.req.param("matchId")
   try {
-    const events = await getRecipeEvents(c.env, matchId)
-    return c.json({ events: events.map(publicRecipeEvent) })
+    const [events, items] = await Promise.all([
+      getRecipeEvents(c.env, matchId),
+      getItemRecords(c.env),
+    ])
+    return c.json({
+      events: events.map(publicRecipeEvent),
+      recipes: items.map(publicRecipeCatalogItem).filter((recipe) => recipe.id > 0),
+    })
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "Failed to load recipe events" }, 500)
   }

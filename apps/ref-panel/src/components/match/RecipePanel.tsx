@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { INGREDIENTS } from "@/data/constants"
-import { RECIPES, RECIPES_ALPHABETICAL } from "@/data/recipes"
+import { RECIPES } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import { isBanLimitReached } from "@/lib/match-rules"
 import type {
@@ -75,6 +75,7 @@ function IngredientBar({ inventory }: { inventory: Inventory }) {
 }
 
 function RecipeList({
+  recipes,
   inventory,
   label,
   phase,
@@ -83,6 +84,7 @@ function RecipeList({
   craftingDisabled,
   onActivate,
 }: {
+  recipes: Recipe[]
   inventory: Inventory
   label: string
   phase?: MatchFlowPhase
@@ -93,7 +95,7 @@ function RecipeList({
 }) {
   const affordableCount = craftingDisabled
     ? 0
-    : RECIPES_ALPHABETICAL.filter((recipe) =>
+    : recipes.filter((recipe) =>
         canAfford(recipe, inventory) && !(banLimitReached && recipe.effectType === "extra_ban")
       ).length
 
@@ -106,7 +108,7 @@ function RecipeList({
       <IngredientBar inventory={inventory} />
 
       <div className="space-y-1.5">
-          {RECIPES_ALPHABETICAL.map((recipe) => {
+          {recipes.map((recipe) => {
             const affordable = canAfford(recipe, inventory)
             const timingOpen = isRecipeTimingOpen(phase, hasPickedMap, craftingDisabled)
             const blockedByBanLimit = banLimitReached && recipe.effectType === "extra_ban"
@@ -138,9 +140,11 @@ function RecipeList({
 }
 
 function RecipeEvents({
+  recipes,
   entries,
   onUndo,
 }: {
+  recipes: Recipe[]
   entries: RecipeEvent[]
   onUndo?: (eventId: string) => void
 }) {
@@ -149,7 +153,8 @@ function RecipeEvents({
     <div className="space-y-1.5">
       <p className="font-heading text-xs uppercase tracking-[0.16em] text-muted-foreground">Recipe status</p>
       {entries.slice().reverse().map((entry) => {
-        const recipe = RECIPES.find((candidate) => candidate.id === entry.recipeId)
+        const recipe = recipes.find((candidate) => candidate.id === entry.recipeId) ??
+          RECIPES.find((candidate) => candidate.id === entry.recipeId)
         if (!recipe) return null
         const wildcardMap = String(entry.payload.wildcardMap ?? "").trim()
         const wildcardSource = [
@@ -213,6 +218,7 @@ function NativeSelect({
 }
 
 interface Props {
+  recipes?: Recipe[]
   invA: Inventory
   invB: Inventory
   labelA: string
@@ -226,6 +232,7 @@ interface Props {
 }
 
 export function RecipePanel({
+  recipes = RECIPES,
   invA,
   invB,
   labelA,
@@ -239,6 +246,9 @@ export function RecipePanel({
 }: Props) {
   const [pending, setPending] = useState<{ player: string; recipe: Recipe } | null>(null)
   const [activation, setActivation] = useState<RecipeActivation>({})
+  const alphabeticalRecipes = [...recipes].sort((left, right) =>
+    left.name.localeCompare(right.name, "en", { numeric: true })
+  )
   const usedA = recipeEvents.filter((event) => event.player.toLowerCase() === labelA.toLowerCase())
   const usedB = recipeEvents.filter((event) => event.player.toLowerCase() === labelB.toLowerCase())
   const availableMaps = mappool.filter((map) => map.status === "available")
@@ -273,13 +283,13 @@ export function RecipePanel({
           </div>
         )}
         <div className="space-y-3">
-          <RecipeEvents entries={usedA} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
+          <RecipeEvents recipes={alphabeticalRecipes} entries={usedA} onUndo={onUndoRecipe} />
+          <RecipeList recipes={alphabeticalRecipes} inventory={invA} label={labelA} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
         </div>
         <Separator />
         <div className="space-y-3">
-          <RecipeEvents entries={usedB} onUndo={onUndoRecipe} />
-          <RecipeList inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
+          <RecipeEvents recipes={alphabeticalRecipes} entries={usedB} onUndo={onUndoRecipe} />
+          <RecipeList recipes={alphabeticalRecipes} inventory={invB} label={labelB} phase={phase} hasPickedMap={hasPickedMap} banLimitReached={banLimitReached} craftingDisabled={craftingLocked} onActivate={openActivation} />
         </div>
       </div>
 

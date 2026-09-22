@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { INVENTORY_A, INVENTORY_B } from "@/data/mock"
-import { RECIPES } from "@/data/recipes"
+import { RECIPES, recipesFromCatalog } from "@/data/recipes"
 import { canAfford } from "@/lib/mappool"
 import {
   baseBanLimitForRound,
@@ -24,7 +24,9 @@ import type {
   Match,
   MatchFlowState,
   PoolMap,
+  Recipe,
   RecipeActivation,
+  RecipeCatalogEntry,
   RecipeEvent,
   ScoreSubmissionDetails,
 } from "@/types"
@@ -47,6 +49,11 @@ interface RecipePickSetup {
   beatmapId?: string
   mapTitle?: string
   winCondition: MapWinCondition
+}
+
+type RecipeSurfaceResponse = {
+  events?: RecipeEvent[]
+  recipes?: RecipeCatalogEntry[]
 }
 
 interface ScoreSubmitOutcome {
@@ -185,6 +192,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
   const [latestRolls, setLatestRolls] = useState<{ a?: number; b?: number }>({})
   const [manualMapActions, setManualMapActions] = useState(false)
   const [recipeEvents, setRecipeEvents] = useState<RecipeEvent[]>([])
+  const [liveRecipes, setLiveRecipes] = useState<Recipe[]>(RECIPES)
   const [scoreSubmitting, setScoreSubmitting] = useState(false)
   const [setupSubmitting, setSetupSubmitting] = useState(false)
   const [detectedScores, setDetectedScores] = useState<{
@@ -313,8 +321,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
         setFlowState(defaultFlowState(match, liveLobbyUrl))
       }
       if (recipeRes.ok) {
-        const data = await recipeRes.json() as { events?: RecipeEvent[] }
+        const data = await recipeRes.json() as RecipeSurfaceResponse
         setRecipeEvents(data.events ?? [])
+        if (data.recipes) setLiveRecipes(recipesFromCatalog(data.recipes))
       }
     }
     void load()
@@ -478,8 +487,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
         for (const notice of data.notices ?? []) ircRef.current?.send(notice)
         const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
         if (recipesRes.ok) {
-          const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
+          const recipesData = await recipesRes.json() as RecipeSurfaceResponse
           setRecipeEvents(recipesData.events ?? [])
+          if (recipesData.recipes) setLiveRecipes(recipesFromCatalog(recipesData.recipes))
         }
         setDetectedScores((current) => ({ slot, run: current.slot === slot ? current.run + 1 : 1 }))
         return { replayRequired: true, alreadyCompleted: false }
@@ -503,8 +513,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
       }
       const recipesRes = await fetch(`/api/match/${match.id}/recipes`, { credentials: "include" })
       if (recipesRes.ok) {
-        const recipesData = await recipesRes.json() as { events?: RecipeEvent[] }
+        const recipesData = await recipesRes.json() as RecipeSurfaceResponse
         setRecipeEvents(recipesData.events ?? [])
+        if (recipesData.recipes) setLiveRecipes(recipesFromCatalog(recipesData.recipes))
       }
       return { replayRequired: false, alreadyCompleted: Boolean(data.alreadyCompleted) }
     } catch {
@@ -524,8 +535,9 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
     ])
     if (inventoryRes.ok) setLiveInventory(await inventoryRes.json() as { a: Inventory; b: Inventory })
     if (recipesRes.ok) {
-      const data = await recipesRes.json() as { events?: RecipeEvent[] }
+      const data = await recipesRes.json() as RecipeSurfaceResponse
       setRecipeEvents(data.events ?? [])
+      if (data.recipes) setLiveRecipes(recipesFromCatalog(data.recipes))
     }
     if (mappoolRes.ok) {
       const data = await mappoolRes.json() as { mappool?: PoolMap[]; scoreA?: number; scoreB?: number }
@@ -536,7 +548,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
   }
 
   function handleRecipeUse(player: string, recipeId: number, activation: RecipeActivation) {
-    const recipe = RECIPES.find((r) => r.id === recipeId)
+    const recipe = liveRecipes.find((r) => r.id === recipeId)
     if (!recipe || !liveInventory) return
     const side = player.toLowerCase() === match.playerA.toLowerCase() ? "a" : "b"
     if (!canAfford(recipe, liveInventory[side])) {
@@ -797,7 +809,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
   const activeBanCount = liveMappool?.filter((map) => map.status === "banned").length ?? 0
   const baseBanLimit = baseBanLimitForRound(match.round)
   const hasActiveExtraBan = recipeEvents.some((event) =>
-    event.status === "active" && RECIPES.find((recipe) => recipe.id === event.recipeId)?.effectType === "extra_ban"
+    event.status === "active" && liveRecipes.find((recipe) => recipe.id === event.recipeId)?.effectType === "extra_ban"
   )
   const effectiveBanLimit = effectiveBanLimitForRound(
     match.round,
@@ -1097,6 +1109,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
 
             <TabsContent value="recipes" className="flex-1 overflow-y-auto p-4">
               <RecipePanel
+                recipes={liveRecipes}
                 invA={liveInventory?.a ?? INVENTORY_A}
                 invB={liveInventory?.b ?? INVENTORY_B}
                 labelA={match.playerA}

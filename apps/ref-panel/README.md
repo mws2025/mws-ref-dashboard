@@ -348,12 +348,14 @@ recipe/tie replay it retains the expected setup and advances to the next recorde
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/match/:matchId/recipes` | Returns persisted recipe events and lifecycle status. |
+| `GET` | `/api/match/:matchId/recipes` | Returns persisted recipe events plus recipe enabled state and authoritative ingredient costs from `items`. |
 | `POST` | `/api/match/:matchId/recipe` | Validates, purchases, and activates or immediately resolves a recipe. |
 | `DELETE` | `/api/match/:matchId/recipe/:eventId` | Reverts and refunds an active recipe that has not activated on a map. |
 
 Recipe events use `active`, `resolved`, or `reverted` status. Legacy events without a status are treated as resolved so
-old rows cannot activate again. Loading the recipe route also adds missing lifecycle columns to `item_events`.
+old rows cannot activate again. Loading the recipe route also adds missing lifecycle columns to `item_events`. The
+match panel uses the returned `items` costs for its requirement display, craftable count, button state, and client-side
+affordability check; the server independently validates and charges those same Sheet values.
 
 ### Lobby And IRC Routes
 

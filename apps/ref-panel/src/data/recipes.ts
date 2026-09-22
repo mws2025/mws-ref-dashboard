@@ -1,4 +1,4 @@
-import type { Recipe } from "@/types"
+import type { Recipe, RecipeCatalogEntry } from "@/types"
 
 export const RECIPES: Recipe[] = [
   { id:  1, name: "Sugar Cube",    desc: "Changes DT into NC.",                                               cost: { sugar: 1 },                               timing: "Before map", effectType: "mod_replace" },
@@ -11,10 +11,10 @@ export const RECIPES: Recipe[] = [
   { id:  8, name: "Cinnamon Roll (Protect)", desc: "Protect one map from being banned.",                     cost: { egg: 1, sugar: 2, butter: 1, flour: 1, milk: 1 }, timing: "Before pick", effectType: "protect_map", inputs: ["protect_map"] },
   { id:  9, name: "Beignets",      desc: "Ban one additional map, up to four total bans.",                   cost: { egg: 2, sugar: 1, butter: 1, flour: 1, milk: 1 }, timing: "Ban phase", effectType: "extra_ban" },
   { id: 10, name: "3 Tier Cake",   desc: "+200,000 score.",                                                   cost: { egg: 1, sugar: 1, butter: 2, flour: 1, milk: 1 }, timing: "After score", effectType: "score_add" },
-  { id: 11, name: "Quiche",        desc: "Force HD on both players for one map.",                            cost: { egg: 3 },                                 timing: "Before pick", effectType: "mod_force_both" },
+  { id: 11, name: "Quiche",        desc: "Force HD on both players for one map.",                            cost: { egg: 4 },                                 timing: "Before pick", effectType: "mod_force_both" },
   { id: 12, name: "Crepe",         desc: "Convert the map to accuracy win condition.",                       cost: { egg: 1, butter: 2, milk: 1 },             timing: "Before map", effectType: "accuracy_mode" },
   { id: 13, name: "Pancakes",      desc: "1.1× scoring for one map.",                                       cost: { flour: 2, milk: 1 },                      timing: "Before map", effectType: "score_multiply" },
-  { id: 14, name: "Brown Butter",  desc: "Force HR on both players for one map.",                            cost: { butter: 3 },                              timing: "Before map", effectType: "mod_force_both" },
+  { id: 14, name: "Brown Butter",  desc: "Force HR on both players for one map.",                            cost: { butter: 4 },                              timing: "Before map", effectType: "mod_force_both" },
   { id: 15, name: "Omelette",      desc: "Steal one chosen ingredient from the opponent.",                   cost: { egg: 1, butter: 1 },                      timing: "Any", effectType: "steal_ingredient", inputs: ["ingredient"] },
   { id: 16, name: "Bubble Tea",    desc: "If the score gap is 10k or less, replay the map.",                 cost: { sugar: 2, milk: 1 },                      timing: "After score", effectType: "conditional_replay" },
   { id: 17, name: "Pound Cake",    desc: "Force SD on both players for one map.",                            cost: { egg: 1, sugar: 2, butter: 1, milk: 1 },  timing: "Before map", effectType: "mod_force_both" },
@@ -30,3 +30,11 @@ export const RECIPES: Recipe[] = [
 export const RECIPES_ALPHABETICAL = [...RECIPES].sort((left, right) =>
   left.name.localeCompare(right.name, "en", { numeric: true })
 )
+
+export function recipesFromCatalog(catalog: readonly RecipeCatalogEntry[]): Recipe[] {
+  const byId = new Map(catalog.map((entry) => [entry.id, entry]))
+  return RECIPES.flatMap((recipe) => {
+    const entry = byId.get(recipe.id)
+    return entry?.enabled ? [{ ...recipe, cost: entry.cost }] : []
+  })
+}

@@ -201,7 +201,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] `POST /api/match/:id/post-result` writes final `matches` result and completes flow state.
 - [x] `PUT /api/match/:id/inventory` persists manual inventory edits.
 - [x] Recipe endpoints validate timing, cost, targets, and effect-specific inputs; persist active/resolved/reverted lifecycle state in `item_events`; and audit use/revert actions.
-- [x] All 24 recipe definitions match the reference costs/effects; duplicate Cinnamon Roll labels are distinguished by action.
+- [x] Recipe costs and enabled state are loaded from `items` for display, craftability, and backend charging; bundled metadata provides descriptions/inputs, and duplicate Cinnamon Roll labels are distinguished by action.
 - [x] Recipe effects modify map commands, lobby mods, score resolution, replay flow, inventory rewards, bans, and protection.
 - [x] Every map enables optional HD through `!mp mods Freemod`; DT uses `!mp mods DT Freemod`, configured NF is retained, and HR remains required per player on HR slots.
 - [x] Score announcements include both inventories, and a deciding score names the winner with GGWP without starting another timer.
