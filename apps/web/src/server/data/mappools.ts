@@ -35,9 +35,8 @@ export const PUBLISHED_STAGE_TABS: readonly string[] = [
   "Q",
   "RO32",
   "RO16",
-  // Published one map short: HR4 is an MWS original with no beatmap id yet,
-  // so it is skipped and appears on the next revalidate once the id is in.
   "QF",
+  "SF",
 ]
 
 // ---------------------------------------------------------------------------
