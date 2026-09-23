@@ -81,6 +81,59 @@ export async function fetchOsuUsers(
   return result
 }
 
+/**
+ * Look up users by osu! username, one request each.
+ *
+ * Only for names the sheet's own roster couldn't resolve — a player who has
+ * changed their osu! username since signing up. The endpoint takes a single
+ * name (there is no batch form), so the caller is expected to pass a handful;
+ * `limit` stops a malformed sheet from turning into a request storm. A miss
+ * (404, or a rename that also freed the old name) is not an error: it yields
+ * no entry and the player renders without an avatar.
+ */
+export async function fetchOsuUsersByName(
+  names: string[],
+  limit = 10
+): Promise<Map<string, OsuUser>> {
+  const result = new Map<string, OsuUser>()
+  if (names.length === 0) return result
+  if (names.length > limit) {
+    console.warn(
+      `[osu] ${names.length} unresolved names, looking up the first ${limit}`
+    )
+  }
+  const token = await getToken()
+
+  for (const name of names.slice(0, limit)) {
+    const res = await fetch(
+      `https://osu.ppy.sh/api/v2/users/${encodeURIComponent(name)}/osu?key=username`,
+      {
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/json",
+        },
+        cache: "no-store",
+      }
+    )
+    if (!res.ok) {
+      if (res.status !== 404) {
+        console.warn(`[osu] username lookup failed for "${name}": ${res.status}`)
+      }
+      continue
+    }
+    const user = (await res.json()) as Record<string, unknown>
+    const id = Number(user.id)
+    if (!Number.isFinite(id)) continue
+    result.set(name.toLowerCase(), {
+      id,
+      rank: extractRank(user),
+      username: user.username as string,
+      countryCode: user.country_code as string,
+    })
+  }
+  return result
+}
+
 function extractRank(user: Record<string, unknown>): number | null {
   const stats =
     (user.statistics as Record<string, unknown> | undefined) ??

@@ -1,18 +1,23 @@
 import "server-only"
 import { unstable_cache } from "next/cache"
 import { readSheetValues } from "../google"
-import { fetchOsuUsers, fetchOsuBeatmaps, computeBws } from "../osu"
+import {
+  fetchOsuUsers,
+  fetchOsuUsersByName,
+  fetchOsuBeatmaps,
+  computeBws,
+} from "../osu"
 import { getEnv, requireEnv } from "../env"
 import { parseRows, toTable } from "./rows"
 import {
-  parseBracket,
-  parseRefPlayers,
-  parseRoundSettings,
-  roundsWithMatches,
-  applyLiveGuard,
-  BRACKET_RANGE,
-  MATCH_SETTINGS_RANGE,
-  REF_PLAYERS_RANGE,
+  parseMatches,
+  parsePlayerList,
+  deriveRounds,
+  withEntrants,
+  unresolvedNames,
+  MATCHES_RANGE,
+  PLAYER_LIST_RANGE,
+  type Entrants,
   type RoundSettings,
   type ScheduleMatch,
 } from "./matches"
@@ -259,29 +264,54 @@ export type Schedule = {
 
 export const getSchedule = cached(TAGS.matches, async (): Promise<Schedule> => {
   const env = await getEnv()
-  const spreadsheetId = requireEnv(env, "SHEET_ID_REFEREE")
+  const spreadsheetId = requireEnv(env, "SHEET_ID_ADMIN")
 
-  // Three independent tabs; one request each, in parallel.
-  const [bracketValues, settingsValues, playerValues] = await Promise.all([
-    readSheetValues(spreadsheetId, env.RANGE_BRACKET ?? BRACKET_RANGE),
-    readSheetValues(
-      spreadsheetId,
-      env.RANGE_MATCH_SETTINGS ?? MATCH_SETTINGS_RANGE
-    ),
-    readSheetValues(spreadsheetId, env.RANGE_REF_PLAYERS ?? REF_PLAYERS_RANGE),
+  // Two independent tabs; one request each, in parallel.
+  const [matchValues, playerValues] = await Promise.all([
+    readSheetValues(spreadsheetId, env.RANGE_MATCHES ?? MATCHES_RANGE),
+    readSheetValues(spreadsheetId, env.RANGE_PLAYER_LIST ?? PLAYER_LIST_RANGE),
   ])
 
-  const rounds = parseRoundSettings(settingsValues)
-  const matches = applyLiveGuard(
-    parseBracket(bracketValues, rounds, parseRefPlayers(playerValues)),
-    rounds
+  const entrants = parsePlayerList(playerValues)
+  const parsed = parseMatches(matchValues)
+  const matches = withEntrants(
+    parsed,
+    entrants,
+    await resolveRenamedPlayers(parsed, entrants)
   )
 
   return {
-    rounds: roundsWithMatches(rounds, matches),
+    rounds: deriveRounds(matches),
     matches: await withPlayerRanks(matches),
   }
 })
+
+/**
+ * osu! ids for the players the registration list didn't cover.
+ *
+ * The match table uses live osu! usernames while `PlayerList` keeps whatever
+ * the player signed up as, so a rename leaves a name that matches nothing.
+ * Asking osu! costs one request per unmatched name — normally none, and a
+ * handful at worst — and it is also what tells a renamed entrant apart from a
+ * referee in one of the test rows the sheet keeps.
+ *
+ * Best-effort: on failure the names stay unresolved and their matches are kept
+ * as-is, without avatars.
+ */
+async function resolveRenamedPlayers(
+  matches: ScheduleMatch[],
+  entrants: Entrants
+): Promise<Map<string, number>> {
+  const names = unresolvedNames(matches, entrants)
+  if (names.length === 0) return new Map()
+  try {
+    const users = await fetchOsuUsersByName(names)
+    return new Map([...users].map(([name, user]) => [name, user.id]))
+  } catch (err) {
+    console.error("[matches] osu! username lookup failed:", err)
+    return new Map()
+  }
+}
 
 /**
  * Attach live global ranks to both sides of every match.

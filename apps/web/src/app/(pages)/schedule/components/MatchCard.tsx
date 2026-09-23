@@ -4,16 +4,24 @@ import { cn } from "@/lib/utils"
 import type { MatchPlayer, ScheduleMatch } from "@/server/data/matches"
 import { FALLBACK_AVATAR } from "../../staff/staff-icons"
 
-/** Every live match points at the tournament's own channel, not the ref's. */
 const TWITCH_URL = "https://www.twitch.tv/mwstournament"
 
 const rankLabel = (rank: number | null): string | null =>
   rank == null ? null : `#${rank.toLocaleString("en-US")}`
 
-/**
- * One side of a match. `align` mirrors the layout so the two players face the
- * scoreline — p1's avatar sits outside-left, p2's outside-right.
- */
+// Fixed to UTC so the server and the client agree on the string. Every time
+// the sheet records is UTC, and the card says so next to the clock.
+const dateFormat = new Intl.DateTimeFormat("en-US", {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+})
+
+/** "Sat, Sep 19". Falls back to the sheet's own text if the date was unusable. */
+const dateLabel = (match: ScheduleMatch): string =>
+  match.startTime ? dateFormat.format(new Date(match.startTime)) : match.date
+
 function PlayerSide({
   player,
   align,
@@ -35,7 +43,9 @@ function PlayerSide({
           needed for these. Players missing from the referee sheet's roster tab
           have no id and fall back to osu!'s guest avatar. */}
       <Image
-        src={player.osuId ? `https://a.ppy.sh/${player.osuId}` : FALLBACK_AVATAR}
+        src={
+          player.osuId ? `https://a.ppy.sh/${player.osuId}` : FALLBACK_AVATAR
+        }
         alt=""
         width={40}
         height={40}
@@ -113,19 +123,22 @@ export function MatchCard({ match }: { match: ScheduleMatch }) {
           isLive ? "border-cherry" : "border-chocolate"
         )}
       >
-        {/* When — the sheet stores a bare "(Sun) Sep 28" with no year, so it is
-            shown verbatim rather than reformatted into a date that would need
-            one guessed. */}
+        {/* When. The sheet's date carries a year, so it is formatted rather
+            than printed raw; a row still waiting on a time reads "TBD". */}
         <div className="flex shrink-0 items-baseline gap-2 sm:w-32 sm:flex-col sm:items-start sm:gap-0">
           <span className="text-espresso/60 text-[0.6875rem] tracking-wide uppercase">
-            {match.date.replace(/^\((\w+)\)\s*/, "$1, ")}
+            {dateLabel(match)}
           </span>
-          <span className="text-sm font-semibold tabular-nums">
-            {match.time}
-            <span className="text-espresso/50 ml-1 text-[0.625rem] font-normal">
-              UTC
+          {match.time ? (
+            <span className="text-sm font-semibold tabular-nums">
+              {match.time}
+              <span className="text-espresso/50 ml-1 text-[0.625rem] font-normal">
+                UTC
+              </span>
             </span>
-          </span>
+          ) : (
+            <span className="text-espresso/50 text-sm font-semibold">TBD</span>
+          )}
         </div>
 
         {/* Players + scoreline. The grid keeps the score dead-centre no matter
@@ -151,15 +164,15 @@ export function MatchCard({ match }: { match: ScheduleMatch }) {
               href={match.mpUrl}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`Match ${match.matchId} on osu!`}
+              aria-label={`Match ${match.matchLabel} on osu!`}
               className="focus-visible:ring-ring/50 text-caramel rounded-sm text-xs font-semibold tabular-nums underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none"
             >
-              #{match.matchId}
+              #{match.matchLabel}
             </Link>
           ) : (
             // No lobby yet — the id still identifies the match on the sheet.
             <span className="text-espresso/40 text-xs font-semibold tabular-nums">
-              #{match.matchId}
+              #{match.matchLabel}
             </span>
           )}
           {isLive && <LiveButton />}

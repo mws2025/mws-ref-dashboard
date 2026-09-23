@@ -71,7 +71,7 @@
       // Every value in .dev.vars needs its own put, or the pages render their
       // empty states instead of the sheet data:
       //   for k in GOOGLE_SA_EMAIL GOOGLE_SA_PRIVATE_KEY SHEET_ID_ADMIN \
-      //            SHEET_ID_POOLING SHEET_ID_REFEREE OSU_CLIENT_ID \
+      //            SHEET_ID_POOLING OSU_CLIENT_ID \
       //            OSU_CLIENT_SECRET REVALIDATE_SECRET; do
       //     bunx wrangler secret put "$k" --env staging
       //   done

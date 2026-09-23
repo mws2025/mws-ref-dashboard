@@ -1,46 +1,39 @@
-// Parsers for the referee sheet ("hoaq ref sheet v0.2").
+// Parsers for the schedule, read from the admin sheet.
 //
-// Three tabs matter, and like the pooling sheet they are read POSITIONALLY:
+// Two tabs matter:
 //
-// 1. `bracket` — one row per match. Row 2 holds headers, rows 3-4 are blank
-//    and data starts at row 5. Several data columns have no header at all
-//    (K/L/M carry ref+streamer signups that duplicate O/P), so header-keyed
-//    reading cannot address this tab.
-// 2. `settings` — round -> best-of. This is what decides whether a score is
-//    final, and therefore whether a match is still live.
-// 3. `players` — osu! user id per player name. The bracket tab names players
-//    but never ids them, and ids are what avatars and ranks need.
+// 1. `m_i` — the match table. One header row, one row per match, fed by a
+//    single IMPORTRANGE from the ref panel's own `matches` sheet. The `b_d`
+//    tab next to it is only a formatted display built from this one with
+//    FILTER(), so this is the source to read: it keeps the best-of, the year
+//    (b_d's dates are bare "(Sat) Sep 19") and an explicit status.
+// 2. `PlayerList` — osu! user id per entrant. `m_i` names players but never
+//    ids them, and ids are what avatars and ranks need.
+//
+// Unlike the pooling sheet these tabs have usable headers, so they are read by
+// key rather than by column position.
 
-/** "A" -> 0, "K" -> 10. Lets the column maps below use sheet letters. */
-const col = (letter: string): number =>
-  letter
-    .toUpperCase()
-    .split("")
-    .reduce((n, c) => n * 26 + (c.charCodeAt(0) - 64), 0) - 1
-
-const cell = (row: string[], i: number): string => (row[i] ?? "").trim()
+import { toTable } from "./rows"
 
 // ---------------------------------------------------------------------------
 // Ranges
 // ---------------------------------------------------------------------------
 
-/** Reaches to Y so the commentator columns are covered; rows are generous. */
-export const BRACKET_RANGE = "bracket!A1:Y400"
-/** Row 3 is the header ("round/pool name", "best of", ...), rounds follow. */
-export const MATCH_SETTINGS_RANGE = "settings!A3:D30"
-/** Row 1 is the header ("user id", "player name", ...). */
-export const REF_PLAYERS_RANGE = "players!A1:E400"
+/** Row 1 is the header. Generous on rows — the tab grows as rounds are drawn. */
+export const MATCHES_RANGE = "m_i!A1:S200"
+/** Row 1 is the header ("User ID", "Player", "Discord", "Team", "Time Zone"). */
+export const PLAYER_LIST_RANGE = "PlayerList!A1:E400"
 
 // ---------------------------------------------------------------------------
-// settings — round metadata
+// Rounds
 // ---------------------------------------------------------------------------
 
 export type RoundSettings = {
-  /** Display name exactly as the bracket tab spells it, e.g. "Round of 32". */
+  /** Display name exactly as the match table spells it, e.g. "Round of 32". */
   stage: string
   /** URL segment, e.g. "ro32". */
   slug: string
-  /** 9, 11, 13 — the sheet's own "best of" column. */
+  /** 9, 11, 13 — the sheet's own `best_of` column. */
   bestOf: number | null
   /** Wins needed to close the match out: 9 -> 5. Null when bestOf is absent. */
   winsNeeded: number | null
@@ -68,84 +61,82 @@ export function stageSlug(stage: string): string {
   return key.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
 }
 
-const num = (raw: string): number | null => {
-  const cleaned = raw.replace(/[^0-9.-]/g, "")
+const num = (raw: string | undefined): number | null => {
+  const cleaned = (raw ?? "").replace(/[^0-9.-]/g, "")
   if (cleaned === "" || cleaned === "-" || cleaned === ".") return null
   const n = Number(cleaned)
   return Number.isFinite(n) ? n : null
 }
 
 /**
- * Parse the `settings` tab's round table.
+ * The rounds to show tabs for, in the order the match table lists them.
  *
- * Order is preserved: the sheet lists rounds in bracket order, and that is the
- * order the round tabs are shown in.
+ * There is no separate round registry to read: every row carries its own round
+ * name and best-of, so the rounds are whatever the drawn matches say they are.
+ * Row order is match id order, which is bracket order, so first appearance is
+ * the right ordering — and a round with no matches never appears at all.
  */
-export function parseRoundSettings(values: string[][]): RoundSettings[] {
+export function deriveRounds(matches: ScheduleMatch[]): RoundSettings[] {
   const rounds: RoundSettings[] = []
-  // The range starts at the header row, so skip it.
-  for (const row of values.slice(1)) {
-    const stage = cell(row, 0)
-    if (!stage) continue
-    const bestOf = num(cell(row, 1))
+  const seen = new Set<string>()
+  for (const match of matches) {
+    if (seen.has(match.slug)) continue
+    seen.add(match.slug)
     rounds.push({
-      stage,
-      slug: stageSlug(stage),
-      bestOf,
-      // Bo9 -> 5. A match ends the moment one player reaches this.
-      winsNeeded: bestOf != null && bestOf > 0 ? Math.ceil(bestOf / 2) : null,
+      stage: match.stage,
+      slug: match.slug,
+      bestOf: match.bestOf,
+      winsNeeded: winsNeeded(match.bestOf),
     })
   }
   return rounds
 }
 
+/** Bo9 -> 5. A match ends the moment one player reaches this. */
+const winsNeeded = (bestOf: number | null): number | null =>
+  bestOf != null && bestOf > 0 ? Math.ceil(bestOf / 2) : null
+
 // ---------------------------------------------------------------------------
-// players — name -> osu! id
+// PlayerList — name -> osu! id
 // ---------------------------------------------------------------------------
 
+export type Entrants = {
+  /** Lower-cased entrant name (player and team spelling) -> osu! user id. */
+  byName: Map<string, number>
+  /** Every registered entrant's id, used to tell real matches from test rows. */
+  ids: Set<number>
+}
+
 /**
- * Map of lower-cased player name -> osu! user id.
+ * Index the registration list.
  *
- * The bracket tab identifies players by name only, so this join is the only
- * route to an avatar or a rank. Names are matched case-insensitively; a player
- * missing here (or renamed since signup) simply renders without an avatar
- * rather than dropping the match.
+ * The match table identifies players by name only, so this join is the only
+ * route to an avatar or a rank. Both the player and team spellings are indexed;
+ * they are identical in this 1v1 season ("Team Size: 1" on the admin Settings
+ * tab), but a team name that drifts from the osu! username shouldn't cost the
+ * player their avatar. Names are matched case-insensitively.
  */
-export function parseRefPlayers(values: string[][]): Map<string, number> {
+export function parsePlayerList(values: string[][]): Entrants {
   const byName = new Map<string, number>()
-  for (const row of values.slice(1)) {
-    const id = num(cell(row, 0))
-    const name = cell(row, 1)
-    if (id == null || !name) continue
-    byName.set(name.toLowerCase(), id)
+  const ids = new Set<number>()
+  for (const row of toTable(values).records) {
+    const id = num(row.userId)
+    if (id == null) continue
+    ids.add(id)
+    for (const name of [row.player, row.team]) {
+      if (name) byName.set(name.toLowerCase(), id)
+    }
   }
-  return byName
+  return { byName, ids }
 }
 
 // ---------------------------------------------------------------------------
-// bracket — the matches themselves
+// m_i — the matches themselves
 // ---------------------------------------------------------------------------
-
-// Column offsets. Header row 2 labels most of these; K/L/M are unlabelled
-// signup cells that mirror O/P, so the labelled pair is what's read.
-const M = {
-  stage: col("C"), // "Round of 32"
-  matchId: col("D"), // "1"
-  date: col("E"), // "(Sun) Sep 28" — no year, see below
-  time: col("F"), // "02:00" (UTC)
-  p1: col("G"), // "red team"
-  p1Score: col("H"), // "5", or "FF"
-  p2Score: col("I"),
-  p2: col("J"), // "blue team"
-  mp: col("K"), // multiplayer room id, blank until the lobby exists
-  referee: col("O"),
-  streamer: col("P"),
-  commentator: col("Q"),
-} as const
 
 export type MatchPlayer = {
   name: string
-  /** Null when the name isn't in the `players` tab. */
+  /** Null when the name can't be resolved to a registered entrant. */
   osuId: number | null
   /** Live global rank, filled by osu! enrichment. */
   rank: number | null
@@ -154,21 +145,23 @@ export type MatchPlayer = {
 export type MatchStatus = "upcoming" | "live" | "complete"
 
 export type ScheduleMatch = {
+  /** Numeric part of the sheet's id — the tournament's own ordering. */
   matchId: number
+  /** The id as the sheet writes it, e.g. "41" or the contingency row "41b". */
+  matchLabel: string
   stage: string
   slug: string
-  /** As written in the sheet, e.g. "(Sun) Sep 28". No year is recorded. */
+  /** ISO 8601 UTC start, or null if the row has no usable date and time. */
+  startTime: string | null
+  /** The date exactly as the sheet writes it ("19/09/2026"), for a fallback. */
   date: string
-  /** As written in the sheet, e.g. "20:00". UTC. */
+  /** The time exactly as the sheet writes it ("16:00"). UTC. */
   time: string
   p1: MatchPlayer
   p2: MatchPlayer
   /** Numeric score, or null when the cell is blank or a forfeit. */
   p1Score: number | null
   p2Score: number | null
-  /** What the cell actually said — "FF" survives for display. */
-  p1ScoreRaw: string
-  p2ScoreRaw: string
   /** Which side forfeited, if either. */
   forfeit: "p1" | "p2" | null
   mpId: number | null
@@ -180,144 +173,231 @@ export type ScheduleMatch = {
   status: MatchStatus
 }
 
-const FORFEIT = /^(ff|forfeit)$/i
+/** A forfeit is written as "FF", or as a -1 on the forfeiting side's score. */
+const FORFEIT = /^(ff|forfeit|-1)$/i
+
+/** The sheet joins the two commentator cells with this. */
+const COMMS_SEPARATOR = "✢"
+
+/**
+ * "41a" — a contingency row.
+ *
+ * When a slot's entrants aren't known yet the sheet keeps the real row ("41",
+ * players blank) and adds one lettered row per possible pairing, each with its
+ * own booked time and staff, so a referee and a stream slot are held whatever
+ * the previous round does. Only one of them can ever be played, so publishing
+ * all four would advertise three matches that won't happen.
+ */
+const CONTINGENCY = /^\d+\s*[a-z]+$/i
+
+/** How long after its start time a match is still assumed to be in progress. */
+const LIVE_WINDOW_MS = 3 * 60 * 60 * 1000
+
+/**
+ * "19/09/2026" + "16:00" -> "2026-09-19T16:00:00.000Z".
+ *
+ * The sheet writes dd/mm/yyyy and treats every time as UTC. Anything that
+ * doesn't match that shape yields null rather than a guessed date — the raw
+ * strings are kept on the match either way, so the card can still render.
+ */
+export function toStartTime(date: string, time: string): string | null {
+  const d = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(date.trim())
+  const t = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
+  if (!d || !t) return null
+  const [, day, month, year] = d
+  const [, hour, minute] = t
+  const ms = Date.UTC(+year, +month - 1, +day, +hour, +minute)
+  if (!Number.isFinite(ms)) return null
+  // Date.UTC rolls overflow over silently (month 13 -> January), so reject
+  // anything that didn't survive the round trip.
+  const iso = new Date(ms)
+  if (iso.getUTCMonth() !== +month - 1 || iso.getUTCDate() !== +day) return null
+  return iso.toISOString()
+}
 
 /**
  * Decide where a match is in its life.
  *
- * Deliberately NOT time-based: the sheet's date cells carry no year
- * ("(Sun) Sep 28"), so comparing them against now means guessing a year and
- * getting it wrong every December. Instead the sheet's own evidence is used —
- * a lobby id or a score on the board means the match started, and a score that
- * reaches the round's win threshold means it finished.
+ * The sheet's own `status` is authoritative when it is set — the ref panel
+ * writes it when a match is closed out. Everything else is inference: a score
+ * that reaches first-to-N is final whatever the status column says, a lobby
+ * with no result yet is in progress, and otherwise the clock decides. The
+ * window matters because a match that was abandoned, retired or never fully
+ * scored would otherwise read as live forever.
  */
 function matchStatus(
+  sheetStatus: string,
   p1Score: number | null,
   p2Score: number | null,
   forfeit: "p1" | "p2" | null,
   mpId: number | null,
-  winsNeeded: number | null
+  wins: number | null,
+  startTime: string | null,
+  now: number
 ): MatchStatus {
   if (forfeit) return "complete"
+  const status = sheetStatus.trim().toLowerCase()
+  if (status === "completed" || status === "forfeit") return "complete"
+
   const p1 = p1Score ?? 0
   const p2 = p2Score ?? 0
-  if (winsNeeded != null && (p1 >= winsNeeded || p2 >= winsNeeded)) {
-    return "complete"
-  }
-  // No best-of configured for this round: without a threshold there is no way
-  // to tell a finished match from one in progress, so never claim it is live.
-  if (winsNeeded == null) return mpId != null ? "complete" : "upcoming"
-  return mpId != null || p1 + p2 > 0 ? "live" : "upcoming"
+  if (wins != null && (p1 >= wins || p2 >= wins)) return "complete"
+  // A lobby exists but nothing has closed the match out yet.
+  if (mpId != null) return "live"
+
+  const start = startTime ? Date.parse(startTime) : NaN
+  if (!Number.isFinite(start)) return p1 + p2 > 0 ? "live" : "upcoming"
+  if (now < start) return "upcoming"
+  // Started, but no lobby, no final score and the window has passed: whatever
+  // the sheet kept is what it is, and the match is not still going.
+  return now < start + LIVE_WINDOW_MS ? "live" : "complete"
 }
 
 /**
- * Parse the `bracket` tab.
+ * Parse the `m_i` tab.
  *
- * A row counts as a match when it has a numeric id and both player names; the
- * tab carries blank spacer rows and unplayed placeholder rows without them.
+ * A row counts as a match when it has an id and both player names; the tab
+ * carries undrawn slots (an id and a pencilled-in date, no players) without
+ * them. Players arrive unresolved — `osuId` is filled in by the caller, which
+ * is also what drops rows that aren't between two registered entrants.
  */
-export function parseBracket(
+export function parseMatches(
   values: string[][],
-  rounds: RoundSettings[],
-  playerIds: Map<string, number>
+  now: number = Date.now()
 ): ScheduleMatch[] {
-  const byStage = new Map(rounds.map((r) => [r.stage.toLowerCase(), r]))
   const matches: ScheduleMatch[] = []
 
-  // Row 2 is the header, rows 3-4 are spacers, data starts at row 5 (index 4).
-  values.slice(4).forEach((row, i) => {
-    const stage = cell(row, M.stage)
-    const matchId = num(cell(row, M.matchId))
-    const p1Name = cell(row, M.p1)
-    const p2Name = cell(row, M.p2)
-    if (!stage || matchId == null) return
+  toTable(values).records.forEach((row, i) => {
+    const matchLabel = row.matchId ?? ""
+    const matchId = num(matchLabel)
+    const stage = row.round ?? ""
+    const p1Name = row.playerA ?? ""
+    const p2Name = row.playerB ?? ""
+    if (matchId == null || !stage) return
     if (!p1Name || !p2Name) return // slot not drawn yet
 
-    const round = byStage.get(stage.toLowerCase())
-    if (!round) {
-      console.warn(
-        `[matches] row ${i + 5}: stage "${stage}" is not in the settings tab — skipped`
-      )
-      return
-    }
+    const p1Raw = row.scoreA ?? ""
+    const p2Raw = row.scoreB ?? ""
 
-    const p1Raw = cell(row, M.p1Score)
-    const p2Raw = cell(row, M.p2Score)
+    // A contingency row earns its place only once it has been played: a score
+    // on the board means this is the pairing that happened.
+    if (CONTINGENCY.test(matchLabel) && !p1Raw && !p2Raw) return
+
     const forfeit = FORFEIT.test(p1Raw)
       ? "p1"
       : FORFEIT.test(p2Raw)
         ? "p2"
         : null
+    const bestOf = num(row.bestOf)
+    const mpId = num(row.mp)
+    const date = row.date ?? ""
+    const time = row.time ?? ""
+    const startTime = toStartTime(date, time)
+    if (date && !startTime) {
+      console.warn(
+        `[matches] row ${i + 2}: unreadable date/time "${date} ${time}"`
+      )
+    }
+
     const p1Score = forfeit ? null : num(p1Raw)
     const p2Score = forfeit ? null : num(p2Raw)
-    const mpId = num(cell(row, M.mp))
 
     matches.push({
       matchId,
-      stage: round.stage,
-      slug: round.slug,
-      date: cell(row, M.date),
-      time: cell(row, M.time),
-      p1: { name: p1Name, osuId: playerIds.get(p1Name.toLowerCase()) ?? null, rank: null },
-      p2: { name: p2Name, osuId: playerIds.get(p2Name.toLowerCase()) ?? null, rank: null },
+      matchLabel,
+      stage,
+      slug: stageSlug(stage),
+      startTime,
+      date,
+      time,
+      p1: { name: p1Name, osuId: null, rank: null },
+      p2: { name: p2Name, osuId: null, rank: null },
       p1Score,
       p2Score,
-      p1ScoreRaw: p1Raw,
-      p2ScoreRaw: p2Raw,
       forfeit,
       mpId,
       mpUrl: mpId != null ? `https://osu.ppy.sh/mp/${mpId}` : null,
-      referee: cell(row, M.referee) || null,
-      streamer: cell(row, M.streamer) || null,
-      commentators: cell(row, M.commentator)
-        .split(",")
+      referee: row.referee || null,
+      streamer: row.streamer || null,
+      commentators: (row.comms ?? "")
+        .split(COMMS_SEPARATOR)
         .map((c) => c.trim())
         .filter(Boolean),
-      bestOf: round.bestOf,
-      status: matchStatus(p1Score, p2Score, forfeit, mpId, round.winsNeeded),
+      bestOf,
+      status: matchStatus(
+        row.status ?? "",
+        p1Score,
+        p2Score,
+        forfeit,
+        mpId,
+        winsNeeded(bestOf),
+        startTime,
+        now
+      ),
     })
   })
 
   // Match id is the tournament's own ordering (it runs in bracket order), and
-  // the sheet is not guaranteed to be sorted.
-  return matches.sort((a, b) => a.matchId - b.matchId)
-}
-
-/**
- * Demote "live" to "complete" outside the round the tournament is actually on.
- *
- * The score rule alone ("hasn't reached first-to-N yet") is the right test for
- * a match in progress, but it also catches every historical match that never
- * reached the threshold — a retirement, a rescheduled match abandoned at 3-1, a
- * score the referee never finished filling in. On last season's sheet that was
- * 42 of 191 rows, spread across rounds that finished months ago.
- *
- * Since rounds run in sequence, only the furthest round with any activity can
- * contain a live match. Earlier rounds keep whatever score the sheet has, but
- * they read as finished rather than perpetually live.
- */
-export function applyLiveGuard(
-  matches: ScheduleMatch[],
-  rounds: RoundSettings[]
-): ScheduleMatch[] {
-  const order = new Map(rounds.map((r, i) => [r.slug, i]))
-  let latestActive = -1
-  for (const m of matches) {
-    if (m.status === "upcoming") continue
-    latestActive = Math.max(latestActive, order.get(m.slug) ?? -1)
-  }
-  return matches.map((m) =>
-    m.status === "live" && (order.get(m.slug) ?? -1) < latestActive
-      ? { ...m, status: "complete" as const }
-      : m
+  // the sheet is not guaranteed to be sorted. Ties fall back to the label so a
+  // played "41a" sorts next to "41" rather than at random.
+  return matches.sort(
+    (a, b) => a.matchId - b.matchId || a.matchLabel.localeCompare(b.matchLabel)
   )
 }
 
-/** Rounds that actually have matches, in the settings tab's order. */
-export function roundsWithMatches(
-  rounds: RoundSettings[],
-  matches: ScheduleMatch[]
-): RoundSettings[] {
-  const present = new Set(matches.map((m) => m.slug))
-  return rounds.filter((r) => present.has(r.slug))
+/**
+ * Attach osu! ids, and drop anything that isn't a match between two entrants.
+ *
+ * `resolved` covers the names the registration list didn't (a player who has
+ * since changed their osu! username), so membership is tested on the id, not
+ * the spelling. Rows between two non-entrants are the ref team's own test
+ * lobbies, which the sheet keeps alongside the real matches.
+ *
+ * Fail-open: a name that resolved to nothing at all keeps its match and simply
+ * renders without an avatar, so an osu! API outage can't empty the schedule.
+ */
+export function withEntrants(
+  matches: ScheduleMatch[],
+  entrants: Entrants,
+  resolved: Map<string, number>
+): ScheduleMatch[] {
+  const idFor = (name: string): number | null =>
+    entrants.byName.get(name.toLowerCase()) ??
+    resolved.get(name.toLowerCase()) ??
+    null
+
+  const out: ScheduleMatch[] = []
+  for (const match of matches) {
+    const p1Id = idFor(match.p1.name)
+    const p2Id = idFor(match.p2.name)
+    if (
+      (p1Id != null && !entrants.ids.has(p1Id)) ||
+      (p2Id != null && !entrants.ids.has(p2Id))
+    ) {
+      console.warn(
+        `[matches] #${match.matchLabel}: "${match.p1.name}" vs "${match.p2.name}" is not between two entrants — skipped`
+      )
+      continue
+    }
+    out.push({
+      ...match,
+      p1: { ...match.p1, osuId: p1Id },
+      p2: { ...match.p2, osuId: p2Id },
+    })
+  }
+  return out
+}
+
+/** Every player name in the schedule that the registration list didn't cover. */
+export function unresolvedNames(
+  matches: ScheduleMatch[],
+  entrants: Entrants
+): string[] {
+  const names = new Set<string>()
+  for (const match of matches) {
+    for (const player of [match.p1, match.p2]) {
+      if (!entrants.byName.has(player.name.toLowerCase())) names.add(player.name)
+    }
+  }
+  return [...names]
 }
