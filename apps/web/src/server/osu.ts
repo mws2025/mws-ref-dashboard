@@ -1,13 +1,50 @@
 import "server-only"
 import { getEnv, requireEnv } from "./env"
 
-let cachedToken: { value: string; expiresAt: number } | null = null
+type CachedToken = { value: string; expiresAt: number }
 
-async function getToken(): Promise<string> {
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken.value
+/**
+ * Where the osu! OAuth token lives, and why it isn't just a module variable.
+ *
+ * A module variable is per-ISOLATE, and a Worker runs many short-lived ones —
+ * every cold isolate, and every background ISR revalidation, was minting its
+ * own token. osu! rate-limits `/oauth/token` hard, so the endpoint started
+ * answering 429 and `enrichMappools` (which throws away every cover if the
+ * lookup fails at all) served cover-less mappools.
+ *
+ * So the token is cached in KV, where every isolate shares it: one mint per
+ * token lifetime instead of one per isolate. The isolate variable stays in
+ * front of it as an L1, since a KV read is a network hop.
+ *
+ * KV is the Next incremental-cache namespace rather than a dedicated one —
+ * it's the only binding on the Worker, and a distinct key namespace keeps it
+ * out of Next's way.
+ */
+const TOKEN_KEY = "osu:oauth-token:v1"
+
+/** Treat a token as spent a minute early, so it can't expire mid-request. */
+const EXPIRY_MARGIN_MS = 60_000
+
+let cachedToken: CachedToken | null = null
+/** Collapses concurrent misses in one isolate into a single mint. */
+let inflight: Promise<string> | null = null
+
+const usable = (t: CachedToken | null): t is CachedToken =>
+  t != null && t.expiresAt > Date.now() + EXPIRY_MARGIN_MS
+
+async function readTokenFromKv(kv: NonNullable<CloudflareEnv["NEXT_INC_CACHE_KV"]> | undefined): Promise<CachedToken | null> {
+  if (!kv) return null
+  try {
+    const raw = await kv.get(TOKEN_KEY)
+    return raw ? (JSON.parse(raw) as CachedToken) : null
+  } catch (err) {
+    // A cache miss is survivable; minting a fresh token is the fallback.
+    console.warn("[osu] token cache read failed:", err)
+    return null
   }
-  const env = await getEnv()
+}
+
+async function mintToken(env: CloudflareEnv): Promise<CachedToken> {
   const res = await fetch("https://osu.ppy.sh/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -25,11 +62,58 @@ async function getToken(): Promise<string> {
     access_token: string
     expires_in: number
   }
-  cachedToken = {
+  return {
     value: json.access_token,
     expiresAt: Date.now() + json.expires_in * 1000,
   }
-  return cachedToken.value
+}
+
+async function resolveToken(): Promise<string> {
+  const env = await getEnv()
+  const kv = env.NEXT_INC_CACHE_KV
+
+  // Another isolate may already have minted one.
+  const shared = await readTokenFromKv(kv)
+  if (usable(shared)) {
+    cachedToken = shared
+    return shared.value
+  }
+
+  let minted: CachedToken
+  try {
+    minted = await mintToken(env)
+  } catch (err) {
+    // Rate-limited or down. A token that is merely inside the safety margin
+    // still works, so prefer it over failing every caller.
+    const stale = cachedToken ?? shared
+    if (stale && stale.expiresAt > Date.now()) {
+      console.warn("[osu] token mint failed, using the cached token:", err)
+      return stale.value
+    }
+    throw err
+  }
+
+  cachedToken = minted
+  if (kv) {
+    const ttl = Math.floor((minted.expiresAt - Date.now()) / 1000)
+    try {
+      // KV rejects a TTL under 60s; such a token isn't worth sharing anyway.
+      if (ttl >= 60) {
+        await kv.put(TOKEN_KEY, JSON.stringify(minted), { expirationTtl: ttl })
+      }
+    } catch (err) {
+      console.warn("[osu] token cache write failed:", err)
+    }
+  }
+  return minted.value
+}
+
+async function getToken(): Promise<string> {
+  if (usable(cachedToken)) return cachedToken.value
+  inflight ??= resolveToken().finally(() => {
+    inflight = null
+  })
+  return inflight
 }
 
 export type OsuUser = {

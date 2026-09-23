@@ -4,6 +4,19 @@ import { getCloudflareContext } from "@opennextjs/cloudflare"
 // Secrets + config bindings we expect on the Worker. These come from
 // `wrangler secret put` (prod) and `.dev.vars` (local `next dev`).
 // Augmenting CloudflareEnv keeps `env.X` fully typed everywhere.
+/**
+ * The slice of a KV binding we actually use. `@cloudflare/workers-types` isn't
+ * installed, and this is small enough not to warrant it.
+ */
+export interface KVLike {
+  get(key: string): Promise<string | null>
+  put(
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number }
+  ): Promise<void>
+}
+
 declare global {
   interface CloudflareEnv {
     // Google service account (sheet shared as Viewer with this account)
@@ -31,6 +44,10 @@ declare global {
 
     // shared secret guarding the /api/revalidate webhook
     REVALIDATE_SECRET?: string
+
+    // Next's incremental cache namespace (see wrangler.jsonc). Also the
+    // cross-isolate home of the osu! OAuth token — see ./osu.ts for why.
+    NEXT_INC_CACHE_KV?: KVLike
   }
 }
 
