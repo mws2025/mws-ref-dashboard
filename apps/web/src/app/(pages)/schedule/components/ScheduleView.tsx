@@ -64,9 +64,9 @@ export function ScheduleView({ rounds, round, matches }: ScheduleViewProps) {
           {matches.length > 0 ? (
             <div className="flex flex-col gap-3">
               {matches.map((match, i) => (
-                // The sheet can repeat an id across speculative bracket rows
-                // (a Grand Finals reset, say), so position disambiguates.
-                <MatchCard key={`${match.matchId}-${i}`} match={match} />
+                // The sheet can repeat an id across bracket rows (a played
+                // contingency row alongside its slot), so position disambiguates.
+                <MatchCard key={`${match.matchLabel}-${i}`} match={match} />
               ))}
             </div>
           ) : (

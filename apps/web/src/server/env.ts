@@ -13,15 +13,13 @@ declare global {
     // Each entity is its own spreadsheet file → one id per entity
     SHEET_ID_ADMIN?: string
     SHEET_ID_POOLING?: string
-    SHEET_ID_REFEREE?: string
 
     // Optional A1 tab/range overrides (default: whole first tab)
     RANGE_STAFF?: string
     RANGE_PLAYERS?: string
-    // Referee sheet tabs. Defaults live in ./data/matches.ts.
-    RANGE_BRACKET?: string
-    RANGE_MATCH_SETTINGS?: string
-    RANGE_REF_PLAYERS?: string
+    // Schedule tabs, both on the admin sheet. Defaults in ./data/matches.ts.
+    RANGE_MATCHES?: string
+    RANGE_PLAYER_LIST?: string
     // Override for the pooling sheet's stage registry (default: Settings!A1:U60).
     // The stage LIST itself is read from that tab, not from env — a pool goes
     // public by ticking "Publish Pool" in the sheet.
