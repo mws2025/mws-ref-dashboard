@@ -20,6 +20,7 @@ import type {
   HomeMod,
   IngKey,
   Inventory,
+  MapScoringMode,
   MapWinCondition,
   Match,
   MatchFlowState,
@@ -49,6 +50,7 @@ interface RecipePickSetup {
   beatmapId?: string
   mapTitle?: string
   winCondition: MapWinCondition
+  scoringMode: MapScoringMode
 }
 
 type RecipeSurfaceResponse = {
@@ -582,6 +584,7 @@ export function MatchPanel({ match, onBack, isDemo = false, testMode = false, is
           map: wildcardTitle,
           beatmapId: wildcardBeatmapId,
           winCondition: data.recipeSetup.winCondition,
+          scoringMode: data.recipeSetup.scoringMode,
           optionalMods: [],
           bpm: 0,
           ar: 0,

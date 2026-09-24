@@ -483,9 +483,9 @@ full cost and reverts that event before Caramel is charged. Only one Caramel can
 validated `caramel_maps` rows across MTT 2024 and MWS 2025, choosing randomly among the globally least-used maps to
 avoid repeats across matches until the list cycles. It creates a dedicated `WC` match-map entry and immediately sets
 the drawn beatmap for play without using or requiring a TB slot. It persists the source slot/stage/year, mods, and win
-condition in its event payload and announces the draw, applied mod, and win condition in lobby chat. Blank or `v2`
-`win_con` uses ScoreV2 score; `acc`, `miss`, and `combo` compare accuracy, lower miss count, and higher max combo
-respectively while the osu! lobby remains on ScoreV2. Blank `mod` applies no
+condition in its event payload and announces the draw, applied mod, and win condition in lobby chat. `win_con` accepts
+the same composable result and scoring tokens as the normal mappool: for example, `acc,v1` compares accuracy in a
+ScoreV1 lobby and `miss,v2` compares lower miss count in a ScoreV2 lobby. Blank defaults to ScoreV2 score. Blank `mod` applies no
 forced mod, so a source HR/DT map is played as NM unless its `mod` column explicitly says otherwise. The explicit
 `double_time`, `hard_rock`, `easy`, `easy-double_time`, and `autopilot` values map to Bancho mod acronyms.
 Magic Cake copies the opponent's latest `resolved` recipe, not
@@ -500,11 +500,13 @@ player IDs, and raw scores. HD usage from osu! match history is authoritative an
 before winner comparison. The referee HD toggles remain the fallback when match history is unavailable or has not yet
 published the matching game.
 
-Each `mappool` row may set `win_con` to `v2`, `acc`, `miss`, or `combo`; blank also means ScoreV2. The lobby remains on
-ScoreV2 for every one of these conditions. After both Bancho score announcements arrive, the match panel correlates
-that exact score pair with the completed osu! game and fills accuracy, miss-count, or max-combo values automatically.
-It retries briefly for osu! history propagation and leaves manual metric entry available as a fallback. Unsupported
-non-empty values stop mappool loading/setup with an explicit configuration error.
+Each `mappool` row may compose one result token (`score`, `acc`, `miss`, or `combo`) with one scoring token (`v1` or
+`v2`) using a comma, slash, plus, pipe, or whitespace. The result token defaults to `score` and the scoring token
+defaults to `v2`, so blank means ScoreV2 score. Examples include `v1`, `acc,v1`, and `miss,v2`. Conflicting or unknown
+tokens stop mappool loading/setup with an explicit configuration error. Map setup sends `!mp set` for the selected
+ScoreV1/ScoreV2 mode. After both Bancho score announcements arrive, the match panel correlates that exact score pair
+with the completed osu! game and fills accuracy, miss-count, or max-combo values automatically. It retries briefly
+for osu! history propagation and leaves manual metric entry available as a fallback.
 
 Every map enables optional HD through `!mp mods Freemod`; DT maps use `!mp mods DT Freemod`. Configured `NF` is
 appended to either command. HR remains a required per-player mod on HR slots and is validated by integration mode.

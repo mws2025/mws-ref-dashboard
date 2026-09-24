@@ -428,6 +428,17 @@ export function parseMappoolMods(value: string): string[] {
     .filter(Boolean)
 }
 
+export type MapScoringMode = "v1" | "v2"
+
+export type MapWinConditionSettings = {
+  winCondition: MapWinCondition
+  scoringMode: MapScoringMode
+}
+
+export function mapScoringModeToBanchoValue(scoringMode: MapScoringMode): 0 | 3 {
+  return scoringMode === "v1" ? 0 : 3
+}
+
 export function caramelLobbyMods(value: string, enforceNF: boolean): string | null {
   const normalized = value.trim().toLowerCase().replace(/[\s+]+/g, "-")
   const modsBySheetValue: Record<string, string[]> = {
@@ -446,13 +457,43 @@ export function caramelLobbyMods(value: string, enforceNF: boolean): string | nu
   return mods ? formatLobbyMods([...mods, "Freemod"], enforceNF) : null
 }
 
+export function parseMapWinConditionSettings(value: string): MapWinConditionSettings | null {
+  const tokens = value.trim()
+    ? value.trim().toLowerCase().split(/[,/|+\s]+/).map((token) => token.replace(/[^a-z0-9]/g, "")).filter(Boolean)
+    : []
+  let winCondition: MapWinCondition = "score"
+  let scoringMode: MapScoringMode = "v2"
+  let explicitWinCondition: MapWinCondition | undefined
+  let explicitScoringMode: MapScoringMode | undefined
+
+  for (const token of tokens) {
+    let tokenWinCondition: MapWinCondition | undefined
+    let tokenScoringMode: MapScoringMode | undefined
+    if (token === "score") tokenWinCondition = "score"
+    else if (token === "acc" || token === "accuracy") tokenWinCondition = "accuracy"
+    else if (token === "miss" || token === "misscount") tokenWinCondition = "miss"
+    else if (token === "combo" || token === "maxcombo") tokenWinCondition = "combo"
+    else if (token === "v1" || token === "scorev1") tokenScoringMode = "v1"
+    else if (token === "v2" || token === "scorev2") tokenScoringMode = "v2"
+    else return null
+
+    if (tokenWinCondition) {
+      if (explicitWinCondition && explicitWinCondition !== tokenWinCondition) return null
+      explicitWinCondition = tokenWinCondition
+      winCondition = tokenWinCondition
+    }
+    if (tokenScoringMode) {
+      if (explicitScoringMode && explicitScoringMode !== tokenScoringMode) return null
+      explicitScoringMode = tokenScoringMode
+      scoringMode = tokenScoringMode
+    }
+  }
+
+  return { winCondition, scoringMode }
+}
+
 export function parseMapWinCondition(value: string): MapWinCondition | null {
-  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]/g, "")
-  if (!normalized || normalized === "v2" || normalized === "score" || normalized === "scorev2") return "score"
-  if (normalized === "acc" || normalized === "accuracy") return "accuracy"
-  if (normalized === "miss" || normalized === "misscount") return "miss"
-  if (normalized === "combo" || normalized === "maxcombo") return "combo"
-  return null
+  return parseMapWinConditionSettings(value)?.winCondition ?? null
 }
 
 export function formatRefereeIrcMessage(username: string, message: string): string {

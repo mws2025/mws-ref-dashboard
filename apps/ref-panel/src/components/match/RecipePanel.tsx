@@ -162,11 +162,12 @@ function RecipeEvents({
           entry.payload.wildcardSourceRound,
           entry.payload.wildcardSourceSlot,
         ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" · ")
-        const wildcardWinCondition = entry.payload.wildcardWinCondition === "accuracy"
+        const wildcardResult = entry.payload.wildcardWinCondition === "accuracy"
           ? "Accuracy"
           : entry.payload.wildcardWinCondition === "miss"
             ? "Miss count"
-            : entry.payload.wildcardWinCondition === "combo" ? "Combo" : "ScoreV2"
+            : entry.payload.wildcardWinCondition === "combo" ? "Combo" : "Score"
+        const wildcardWinCondition = `${wildcardResult} (${entry.payload.wildcardScoringMode === "v1" ? "ScoreV1" : "ScoreV2"})`
         const wildcardMod = String(entry.payload.wildcardMod ?? "").trim() || "NM"
         return (
           <div key={entry.id} className="rounded-md border border-border/70 bg-card/35 px-3 py-2">

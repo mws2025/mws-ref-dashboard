@@ -7,6 +7,7 @@ export type RecipeEventStatus = "active" | "resolved" | "reverted"
 export type RecipeInputKind = "mod" | "mods_both" | "protect_map" | "unban_map" | "ingredient"
 export type HomeMod = "NM" | "PS" | "HR" | "DT" | "FM"
 export type MapWinCondition = "score" | "accuracy" | "miss" | "combo"
+export type MapScoringMode = "v1" | "v2"
 export type MatchFlowPhase =
   | "lobby"
   | "roll"
@@ -24,6 +25,7 @@ export interface PoolMap {
   map: string
   beatmapId?: string
   winCondition?: MapWinCondition
+  scoringMode?: MapScoringMode
   optionalMods?: string[]
   bpm: number
   ar: number

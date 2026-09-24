@@ -23,10 +23,12 @@ import {
   mapResultFromScoreReport,
   lobbyInviteTarget,
   lobbyModsForPool,
+  mapScoringModeToBanchoValue,
   nextPlayerAfterPick,
   normalizeHdScore,
   parseMappoolMods,
   parseMapWinCondition,
+  parseMapWinConditionSettings,
   parseScoreValue,
   parseRollAnnouncement,
   parseFinishedScoreAnnouncement,
@@ -89,7 +91,19 @@ describe("lobby mods", () => {
     expect(parseMapWinCondition("accuracy")).toBe("accuracy")
     expect(parseMapWinCondition("miss")).toBe("miss")
     expect(parseMapWinCondition("combo")).toBe("combo")
+    expect(parseMapWinCondition("acc,v1")).toBe("accuracy")
+    expect(parseMapWinCondition("miss / v2")).toBe("miss")
     expect(parseMapWinCondition("unsupported")).toBeNull()
+    expect(parseMapWinCondition("miss,acc")).toBeNull()
+    expect(parseMapWinCondition("v1,v2")).toBeNull()
+
+    expect(parseMapWinConditionSettings("")).toEqual({ winCondition: "score", scoringMode: "v2" })
+    expect(parseMapWinConditionSettings("v1")).toEqual({ winCondition: "score", scoringMode: "v1" })
+    expect(parseMapWinConditionSettings("v2")).toEqual({ winCondition: "score", scoringMode: "v2" })
+    expect(parseMapWinConditionSettings("acc,v1")).toEqual({ winCondition: "accuracy", scoringMode: "v1" })
+    expect(parseMapWinConditionSettings("miss,v2")).toEqual({ winCondition: "miss", scoringMode: "v2" })
+    expect(mapScoringModeToBanchoValue("v1")).toBe(0)
+    expect(mapScoringModeToBanchoValue("v2")).toBe(3)
   })
 
   test("parses optional mappool mods without enforcing an acronym list", () => {

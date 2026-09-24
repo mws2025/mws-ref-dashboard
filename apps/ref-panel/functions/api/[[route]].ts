@@ -20,13 +20,16 @@ import {
   isValidRoll,
   lobbyInviteTarget,
   lobbyModsForPool,
+  mapScoringModeToBanchoValue,
   mapResultFromScoreReport,
+  type MapScoringMode,
   type MapWinCondition,
   MAX_MATCH_BANS,
   nextPlayerAfterPick,
   normalizeHdScore,
   parseMappoolMods,
   parseMapWinCondition,
+  parseMapWinConditionSettings,
   parseScoreValue,
   normalizeScheduleTime,
   parseCreatedLobbyAnnouncement,
@@ -110,6 +113,7 @@ type ApiPoolMap = {
   map: string
   beatmapId?: string
   winCondition: MapWinCondition
+  scoringMode: MapScoringMode
   optionalMods: string[]
   status: string
   pickedBy?: string
@@ -2055,6 +2059,7 @@ type RecipePickSetup = {
   beatmapId?: string
   mapTitle?: string
   winCondition: MapWinCondition
+  scoringMode: MapScoringMode
 }
 
 async function activateRecipesForPick(
@@ -2092,14 +2097,15 @@ async function activateRecipesForPick(
   }
 
   const enforceNF = configMap.get("enforce nf?")?.toLowerCase() === "true"
-  const mapWinCondition = parseMapWinCondition(mapWinConditionValue)
-  if (mapWinCondition === null) throw new Error(`${slot} has invalid win_con: ${mapWinConditionValue}`)
+  const mapSettings = parseMapWinConditionSettings(mapWinConditionValue)
+  if (mapSettings === null) throw new Error(`${slot} has invalid win_con: ${mapWinConditionValue}`)
   let mods = lobbyModsForPool(pool, enforceNF)
   const commandsBefore: string[] = []
   const notices: string[] = []
   let beatmapId: string | undefined
   let mapTitle: string | undefined
-  let winCondition: MapWinCondition = mapWinCondition
+  let winCondition: MapWinCondition = mapSettings.winCondition
+  let scoringMode: MapScoringMode = mapSettings.scoringMode
   const extraPlayerMods = new Map<string, Set<string>>([
     [playerA.toLowerCase(), new Set<string>()],
     [playerB.toLowerCase(), new Set<string>()],
@@ -2141,11 +2147,10 @@ async function activateRecipesForPick(
       }
     } else if (effectType === "accuracy_mode") {
       winCondition = "accuracy"
-      commandsBefore.push(`!mp set ${teamMode} 1 ${lobbySize}`)
+      scoringMode = "v1"
     } else if (effectType === "scoring_mode") {
-      commandsBefore.push(`!mp set ${teamMode} 0 ${lobbySize}`)
+      scoringMode = "v1"
     } else if (effectType === "wildcard_slot") {
-      commandsBefore.push(`!mp set ${teamMode} 3 ${lobbySize}`)
       beatmapId = String(payload.wildcardBeatmapId ?? "").trim() || undefined
       mapTitle = String(payload.wildcardMap ?? "").trim() || undefined
       const wildcardMod = payload.wildcardMod
@@ -2156,8 +2161,14 @@ async function activateRecipesForPick(
         const wildcardPool = String(payload.wildcardPool ?? "").trim().toUpperCase()
         if (wildcardPool) mods = lobbyModsForPool(wildcardPool, enforceNF)
       }
-      const wildcardWinCondition = parseMapWinCondition(String(payload.wildcardWinCondition ?? ""))
-      if (wildcardWinCondition) winCondition = wildcardWinCondition
+      const wildcardSettings = parseMapWinConditionSettings([
+        payload.wildcardWinCondition,
+        payload.wildcardScoringMode,
+      ].filter(Boolean).join(","))
+      if (wildcardSettings) {
+        winCondition = wildcardSettings.winCondition
+        scoringMode = wildcardSettings.scoringMode
+      }
       if (mapTitle) {
         const year = String(payload.wildcardMappoolYear ?? "Unknown year").trim()
         const sourceSlot = String(payload.wildcardSourceSlot ?? "Unknown pick").trim()
@@ -2170,10 +2181,10 @@ async function activateRecipesForPick(
           .join(" ")
         const modLabel = fixedMods || "NM (none)"
         notices.push(`Caramel map: (${year}) - ${sourceSlot} - ${mapTitle}`)
-        const winConditionLabel = winCondition === "accuracy"
+        const resultLabel = winCondition === "accuracy"
           ? "Accuracy"
-          : winCondition === "miss" ? "Miss count" : winCondition === "combo" ? "Combo" : "ScoreV2"
-        notices.push(`Mod applied: ${modLabel} - Win condition: ${winConditionLabel}`)
+          : winCondition === "miss" ? "Miss count" : winCondition === "combo" ? "Combo" : "Score"
+        notices.push(`Mod applied: ${modLabel} - Win condition: ${resultLabel} (${scoringMode === "v1" ? "ScoreV1" : "ScoreV2"})`)
       }
     }
   }
@@ -2186,6 +2197,7 @@ async function activateRecipesForPick(
   const requiredMods = (playerName: string): string[] => [
     ...new Set([...globalPlayerMods, ...poolPlayerMods, ...(extraPlayerMods.get(playerName.toLowerCase()) ?? [])]),
   ]
+  commandsBefore.unshift(`!mp set ${teamMode} ${mapScoringModeToBanchoValue(scoringMode)} ${lobbySize}`)
   return {
     eventIds: active.map((event) => event.id),
     mods,
@@ -2196,6 +2208,7 @@ async function activateRecipesForPick(
     beatmapId,
     mapTitle,
     winCondition,
+    scoringMode,
   }
 }
 
@@ -2608,15 +2621,16 @@ app.get("/api/match/:matchId/mappool", async (c) => {
       const slot = r["map_id"]?.trim() ?? ""
       const ov   = overrides.get(slot.toLowerCase())
       const beatmapId = r["beatmap_id"]?.trim() || undefined
-      const winCondition = parseMapWinCondition(firstValue(r, ["win_con"]))
+      const winConditionSettings = parseMapWinConditionSettings(firstValue(r, ["win_con"]))
       const optionalMods = parseMappoolMods(firstValue(r, ["mods"]))
-      if (winCondition === null) throw new Error(`${slot} has invalid win_con: ${firstValue(r, ["win_con"])}`)
+      if (winConditionSettings === null) throw new Error(`${slot} has invalid win_con: ${firstValue(r, ["win_con"])}`)
       return {
         slot,
         pool:      r["mod_pool"]?.trim().toUpperCase() ?? "",
         map:       r["title"]?.trim() ?? "",
         beatmapId,
-        winCondition,
+        winCondition: winConditionSettings.winCondition,
+        scoringMode: winConditionSettings.scoringMode,
         optionalMods,
         status:    ov?.["status"]?.trim() || "available",
         pickedBy:  ov?.["picked_by"]?.trim() || undefined,
@@ -2648,6 +2662,7 @@ app.get("/api/match/:matchId/mappool", async (c) => {
         map: `${String(latestCaramel.payload.wildcardMap ?? "Caramel wildcard")}${source ? ` (${source})` : ""}`,
         beatmapId: String(latestCaramel.payload.wildcardBeatmapId),
         winCondition: parseMapWinCondition(String(latestCaramel.payload.wildcardWinCondition ?? "")) ?? "score",
+        scoringMode: latestCaramel.payload.wildcardScoringMode === "v1" ? "v1" : "v2",
         optionalMods: [],
         status: wildcardOverride?.status?.trim() || (latestCaramel.status === "resolved" ? "completed" : "picked"),
         pickedBy: wildcardOverride?.picked_by?.trim() || latestCaramel.player,
@@ -4401,15 +4416,15 @@ app.post("/api/match/:matchId/recipe", async (c) => {
         const title = firstValue(record, ["title"])
         const stage = firstValue(record, ["stage"])
         const mod = firstValue(record, ["mod"])
-        const winCondition = parseMapWinCondition(firstValue(record, ["win_con"]))
+        const winConditionSettings = parseMapWinConditionSettings(firstValue(record, ["win_con"]))
         const mappoolYear = firstValue(record, ["mappool_year"])
         const beatmapId = firstValue(record, ["map_id"])
         if (
           !pickId || !title || !stage || !mappoolYear ||
           !/^\d+$/.test(beatmapId) || Number(beatmapId) <= 0 ||
-          caramelLobbyMods(mod, false) === null || winCondition === null
+          caramelLobbyMods(mod, false) === null || winConditionSettings === null
         ) return []
-        return [{ pickId, title, stage, mod, winCondition, mappoolYear, beatmapId }]
+        return [{ pickId, title, stage, mod, ...winConditionSettings, mappoolYear, beatmapId }]
       })
       if (randomCandidates.length === 0) {
         return c.json({ error: "No valid maps are configured in caramel_maps" }, 409)
@@ -4438,6 +4453,7 @@ app.post("/api/match/:matchId/recipe", async (c) => {
       activationPayload.wildcardMappoolYear = randomMap?.mappoolYear
       activationPayload.wildcardMod = randomMap?.mod
       activationPayload.wildcardWinCondition = randomMap?.winCondition
+      activationPayload.wildcardScoringMode = randomMap?.scoringMode
     }
 
     if (effectType === "comeback_bonus") {

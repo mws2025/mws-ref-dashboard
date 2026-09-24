@@ -193,7 +193,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Manual pick/ban order toggle defaults off; enabling it allows free pick/ban/protect actions by either player.
 - [x] Ban state uses the latest row per slot; RO32 has one base ban per player, later rounds have two, and Beignets can add its explicit extra ban up to the four-ban ceiling.
 - [x] Recipes are crafted before selection; picking closes crafting and `POST /api/match/:id/setup-map` binds active recipes and advances to play.
-- [x] `POST /api/match/:id/score` treats blank/`v2` `win_con` as ScoreV2, supports sheet-driven `acc`, `miss`, and `combo` comparisons, normalizes HD scores by 1.06 for ScoreV2, and atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
+- [x] `POST /api/match/:id/score` treats blank `win_con` as ScoreV2 score and supports composable result/scoring tokens such as `acc,v1` and `miss,v2`; it normalizes HD scores for score comparisons and atomically writes map scores, canonical match stars, inventories, recipe resolutions, and flow state; retries are idempotent.
 - [x] BanchoBot finish messages auto-fill score entry; refs can persist absolute star corrections with `POST /api/match/:id/match-score`.
 - [x] Completed map slots can be repicked as additional history rows; TB is restricted to mutual match point.
 - [x] Home-mod pools award one bonus ingredient to their owner on either a win or loss.
