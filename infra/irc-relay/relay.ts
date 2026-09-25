@@ -6,6 +6,7 @@ const IRC_BOT_USERNAME = process.env.IRC_BOT_USERNAME ?? ""
 const IRC_BOT_PASSWORD = process.env.IRC_BOT_PASSWORD ?? ""
 const IRC_RELAY_SECRET = process.env.IRC_RELAY_SECRET ?? ""
 const RELAY_PORT = parseInt(process.env.RELAY_PORT ?? "7000", 10)
+const WEBHOOK_CHANNEL = process.env.IRC_WEBHOOK_CHANNEL ?? "#vietnamese"
 
 if (!IRC_BOT_USERNAME || !IRC_BOT_PASSWORD || !IRC_RELAY_SECRET) {
   console.error("[FATAL] Missing env: IRC_BOT_USERNAME, IRC_BOT_PASSWORD, IRC_RELAY_SECRET")
@@ -217,9 +218,11 @@ const server = Bun.serve({
 
     if (req.method === "GET" && url.pathname === "/stream") {
       const channel = url.searchParams.get("channel")?.trim() ?? ""
-      if (!isLobbyChannel(channel)) {
+      if (!isLobbyChannel(channel) && channel !== WEBHOOK_CHANNEL) {
         return Response.json({ error: "valid lobby channel required" }, { status: 400 })
       }
+      if (!ircConnected) return Response.json({ error: "IRC not connected" }, { status: 503 })
+      await ensureJoined(channel)
       let clientRef: SseClient
       let heartbeat: ReturnType<typeof setInterval> | undefined
       const stream = new ReadableStream<Uint8Array>({
