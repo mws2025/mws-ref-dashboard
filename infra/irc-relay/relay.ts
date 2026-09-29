@@ -1,12 +1,13 @@
 import { Client } from "irc-framework"
 
-const IRC_HOST = "irc.ppy.sh"
-const IRC_PORT = 6667
+const IRC_HOST = process.env.IRC_HOST ?? "irc.ppy.sh"
+const IRC_PORT = parseInt(process.env.IRC_PORT ?? "6667", 10)
 const IRC_BOT_USERNAME = process.env.IRC_BOT_USERNAME ?? ""
 const IRC_BOT_PASSWORD = process.env.IRC_BOT_PASSWORD ?? ""
 const IRC_RELAY_SECRET = process.env.IRC_RELAY_SECRET ?? ""
 const RELAY_PORT = parseInt(process.env.RELAY_PORT ?? "7000", 10)
 const WEBHOOK_CHANNEL = process.env.IRC_WEBHOOK_CHANNEL ?? "#vietnamese"
+const DISCONNECT_GRACE_MS = parseInt(process.env.IRC_DISCONNECT_GRACE_MS ?? "120000", 10)
 
 if (!IRC_BOT_USERNAME || !IRC_BOT_PASSWORD || !IRC_RELAY_SECRET) {
   console.error("[FATAL] Missing env: IRC_BOT_USERNAME, IRC_BOT_PASSWORD, IRC_RELAY_SECRET")
@@ -21,6 +22,8 @@ const sseClients = new Set<SseClient>()
 const joinedChannels = new Set<string>()
 const irc = new Client()
 let ircConnected = false
+let disconnectedSince = Date.now()
+let lastConnectedAt: string | null = null
 let makeQueue: Promise<void> = Promise.resolve()
 const inflightMakes = new Map<string, Promise<{ mpId: string; lobbyUrl: string }>>()
 const recentMakes = new Map<string, { title: string; mpId: string; lobbyUrl: string; expiresAt: number }>()
@@ -58,6 +61,13 @@ function broadcast(event: RelayEvent): void {
   }
 }
 
+function closeStreams(): void {
+  for (const client of sseClients) {
+    try { client.controller.close() } catch { /* The browser may already have closed this stream. */ }
+  }
+  sseClients.clear()
+}
+
 irc.connect({
   host: IRC_HOST,
   port: IRC_PORT,
@@ -73,18 +83,32 @@ irc.connect({
 irc.on("registered", () => {
   console.log(`[IRC] Connected as ${IRC_BOT_USERNAME}`)
   ircConnected = true
+  lastConnectedAt = new Date().toISOString()
   for (const channel of joinedChannels) irc.join(channel)
 })
 
 irc.on("close", () => {
-  console.log("[IRC] Connection closed")
+  console.error("[IRC] Connection closed permanently; PM2 will restart the relay")
   ircConnected = false
+  closeStreams()
+  process.exit(1)
 })
 
-irc.on("reconnecting", () => {
-  console.log("[IRC] Reconnecting...")
+irc.on("reconnecting", (state: { attempt?: number; wait?: number }) => {
+  console.warn(`[IRC] Reconnecting: attempt ${state.attempt ?? "?"}, wait ${state.wait ?? "?"}ms`)
+  if (ircConnected) disconnectedSince = Date.now()
   ircConnected = false
+  closeStreams()
 })
+
+irc.on("socket error", (error: unknown) => console.error("[IRC] Socket error:", error))
+irc.on("error", (error: unknown) => console.error("[IRC] Client error:", error))
+
+setInterval(() => {
+  if (ircConnected || Date.now() - disconnectedSince < DISCONNECT_GRACE_MS) return
+  console.error(`[IRC] Disconnected for ${DISCONNECT_GRACE_MS}ms; PM2 will restart the relay`)
+  process.exit(1)
+}, 10_000)
 
 irc.on("message", (event: { nick: string; target: string; message: string }) => {
   const relayEvent = {
@@ -180,7 +204,14 @@ const server = Bun.serve({
     const url = new URL(req.url)
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return Response.json({ status: "ok", connected: ircConnected, channelIsolation: true, atomicLobbyCreation: true })
+      return Response.json({
+        status: ircConnected ? "ok" : "degraded",
+        connected: ircConnected,
+        lastConnectedAt,
+        disconnectedSince: ircConnected ? null : new Date(disconnectedSince).toISOString(),
+        channelIsolation: true,
+        atomicLobbyCreation: true,
+      }, { status: ircConnected ? 200 : 503 })
     }
 
     if (!checkAuth(req)) return Response.json({ error: "Unauthorized" }, { status: 401 })

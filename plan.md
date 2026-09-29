@@ -169,7 +169,7 @@ Full list in `src/data/recipes.ts`. 24 active recipes. Reference sheet in repo.
 - [x] Test mode amber banner at very top of page.
 
 ### IRC Relay
-- [x] VPS Bun relay as systemd service `irc-relay`. Auth: `X-Relay-Secret`.
+- [x] VPS Bun relay runs as PM2 `irc-relay` with automatic recovery from terminal IRC closes and stalled connections; PM2 also manages the webhook subscriber. Auth: `X-Relay-Secret`.
 - [x] `POST /api/irc/send`, `GET /api/irc/stream` on CF worker.
 - [x] `IrcChat.tsx`: SSE, send, status dot, quick commands (invite by `#osuId`, settings, move, timer, start, abort).
 - [x] Messages persist across tab switches via `forceMount`.
