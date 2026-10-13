@@ -71,7 +71,17 @@ export const getStaff = cached(TAGS.staff, async (): Promise<Staff[]> => {
     toTable(values).records.map((r) => remap(r, STAFF_KEY_ORDER)),
     staffSchema
   )
-  const rows = allRows.filter((row) => row.approved)
+  // The form gets resubmitted, so the same person can appear on several
+  // approved rows. Keep the first, keyed on osu! id, or on the discord handle
+  // (case-insensitively) when there is no id.
+  const seen = new Set<string>()
+  const rows = allRows.filter((row) => {
+    if (!row.approved) return false
+    const key = row.id !== null ? `id:${row.id}` : `discord:${row.discord.toLowerCase()}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 
   // Only rows with a linked osu! account need the API round-trip.
   const linked = rows.filter((r): r is typeof r & { id: number } => r.id !== null)

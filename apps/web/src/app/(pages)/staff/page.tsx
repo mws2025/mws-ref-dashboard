@@ -28,7 +28,7 @@ const TEAM_MAPPINGS: Record<string, string[]> = {
   Streamers: ["Streamer"],
   Commentators: ["Commentator"],
   Referees: ["Referee"],
-  Composers: ["Composer", "Voice Actor"],
+  Composers: ["Composer", "Voice Actor", "Vocalist"],
 }
 
 export default async function StaffMembers() {

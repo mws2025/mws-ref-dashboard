@@ -16,7 +16,7 @@
 const STAFF_ICONS: Record<string, string> = {
   _yukeuii: "/staff-icons/_yukeuii.webp",
   aiyru: "/staff-icons/aiyru.webp",
-  arushii: "/staff-icons/arushii.webp",
+  arushii09: "/staff-icons/arushii.webp",
   cocoball: "/staff-icons/cocoball.webp",
   cocorhi: "/staff-icons/cocorhi.webp",
   they: "/staff-icons/they.webp",
