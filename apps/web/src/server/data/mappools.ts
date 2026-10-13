@@ -38,6 +38,7 @@ export const PUBLISHED_STAGE_TABS: readonly string[] = [
   "QF",
   "SF",
   "F",
+  "GF",
 ]
 
 // ---------------------------------------------------------------------------
